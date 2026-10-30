@@ -63,13 +63,23 @@ export class InputDevices {
   private uiListeners: ((k: UiKey) => void)[] = [];
   private rawListeners: (() => void)[] = [];
   private prevPadButtons: boolean[] = [];
+  private prevPadAxes: boolean[] = [];
   private keymap: KeyMap = { ...STANDARD_KEYS };
   /** While true (key remapping in Settings), keys do not reach the game. */
   capturing = false;
-  /** True while a gamepad is connected and has been used. */
+  /**
+   * True while the gamepad is the last-used device: a pad button or stick sets it, a game key
+   * or a pointer / touch down clears it (the prompts follow it).
+   */
   padActive = false;
   /** Stick deflection (0..~1.4) in the last sample, before smoothing. */
   rawStick = 0;
+
+  /** Which prompts to show: the last-used device (a touch screen shows touch prompts, not keys). */
+  promptKind(touchScreen: boolean): 'pad' | 'touch' | 'keys' {
+    if (this.padActive) return 'pad';
+    return touchScreen ? 'touch' : 'keys';
+  }
 
   setKeyMap(km: KeyMap): void {
     this.keymap = km;
@@ -79,11 +89,15 @@ export class InputDevices {
     target.addEventListener('keydown', this.onKeyDown);
     target.addEventListener('keyup', this.onKeyUp);
     target.addEventListener('blur', this.onBlur);
+    target.addEventListener('pointerdown', this.onPointerDown, { capture: true });
     target.addEventListener('gamepadconnected', (e: GamepadEvent) => {
       this.padIndex = e.gamepad.index;
     });
     target.addEventListener('gamepaddisconnected', (e: GamepadEvent) => {
-      if (this.padIndex === e.gamepad.index) this.padIndex = null;
+      if (this.padIndex === e.gamepad.index) {
+        this.padIndex = null;
+        this.padActive = false;
+      }
     });
   }
 
@@ -122,6 +136,7 @@ export class InputDevices {
     const t = e.target as HTMLElement | null;
     if (this.capturing) return;
     if (t && (t.tagName === 'SELECT' || t.tagName === 'INPUT')) return;
+    this.padActive = false;
     // Keyboard navigation of the left menu: Space / Enter / arrows act on the focused control.
     const inMenu = !!t && t !== document.body && typeof t.closest === 'function' && t.closest('#rail') !== null;
     if (inMenu && e.code !== 'Escape') return;
@@ -141,6 +156,10 @@ export class InputDevices {
 
   private onKeyUp = (e: KeyboardEvent): void => {
     if (this.held.delete(e.code)) this.emitRaw();
+  };
+
+  private onPointerDown = (): void => {
+    this.padActive = false;
   };
 
   private onBlur = (): void => {
@@ -207,8 +226,12 @@ export class InputDevices {
       this.bHeld = gp.buttons[1]?.pressed ? this.bHeld + dt : 0;
       list.push(mapGamepad(state, this.bHeld));
       const pressed = gp.buttons.map((b) => b.pressed);
-      if (pressed.some(Boolean) || gp.axes.some((a) => Math.abs(a) > 0.3)) this.padActive = true;
       const edge = (i: number): boolean => !!pressed[i] && !this.prevPadButtons[i];
+      // A new press or a stick pushed past the threshold makes the pad the last-used device
+      // (edges only: a held button or an axis that rests off centre does not win it back).
+      const hot = gp.axes.map((a) => Math.abs(a) > 0.3);
+      if (pressed.some((_, i) => edge(i)) || hot.some((h, i) => h && !this.prevPadAxes[i])) this.padActive = true;
+      this.prevPadAxes = hot;
       if (edge(3) || edge(12) || edge(13)) this.emitUi('camera');
       if (edge(8)) this.emitUi('pause');
       this.prevPadButtons = pressed;

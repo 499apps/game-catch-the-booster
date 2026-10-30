@@ -21,6 +21,41 @@ test('HUD: the Go/No-Go board never covers ALTITUDE, PROP or STOP (all layouts)'
   }
 });
 
+test('final approach: the opening radio caption never covers the LIGHT pill, its cue or the strip (all layouts)', async ({ page }) => {
+  await openGame(page, 'test=1&seed=4');
+  await startTier(page, 'pilot');
+  // The caption and LIGHT both show from the first frames of the run: read both boxes in the
+  // same frame, once both are up.
+  const handle = await page.waitForFunction(
+    () => {
+      const box = (id: string): { x: number; y: number; width: number; height: number } | null => {
+        const e = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+        if (!e || e.hidden) return null;
+        const r = e.getBoundingClientRect();
+        return r.width > 0 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
+      };
+      const cap = document.querySelector('[data-testid="captions"]');
+      const light = box('light-btn');
+      if (!cap?.classList.contains('show') || !light) return null;
+      return { cap: box('captions'), light, cue: box('ign-cue'), strip: box('telemetry'), text: cap.textContent ?? '' };
+    },
+    undefined,
+    { timeout: 10_000 },
+  );
+  const b = await handle.jsonValue();
+  if (!b) throw new Error('no caption / LIGHT boxes');
+  expect(b.cap, 'caption box').not.toBeNull();
+  if (!b.cap) return;
+  expect(overlaps(b.cap, b.light), `caption "${b.text}" covers LIGHT`).toBe(false);
+  if (b.cue) expect(overlaps(b.cap, b.cue), 'caption covers the 3-2-1 cue').toBe(false);
+  if (b.strip) expect(overlaps(b.cap, b.strip), 'caption covers the strip').toBe(false);
+  const vp = page.viewportSize();
+  if (vp) {
+    expect(b.light.y + b.light.height).toBeLessThanOrEqual(vp.height + 1);
+    expect(b.cap.y).toBeGreaterThanOrEqual(0);
+  }
+});
+
 test('phone strip: no chip, value or cell clips its own text during the flight', async ({ page }, info) => {
   test.skip(info.project.name !== 'iphone-15' && info.project.name !== 'pixel-7', 'The compact strip is for phones.');
   for (const [tier, at] of [

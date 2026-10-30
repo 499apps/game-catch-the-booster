@@ -2,7 +2,7 @@
 // No DOM access here, so it is unit-testable; src/input/* device code feeds it raw state.
 import type { PilotInput } from '../sim/types';
 
-export const STICK_RATE = 3.0; // stick units per second (full deflection in ~0.33 s)
+export const STICK_RATE = 6.0; // stick units per second (full deflection in ~0.17 s)
 export const THROTTLE_LEVER_RATE = 1.5; // lever units per second
 export const KEY_THROTTLE_RATE = 0.6; // lever units per second while Shift / Ctrl is held
 export const STICK_SMOOTH_TAU = 0.06; // s

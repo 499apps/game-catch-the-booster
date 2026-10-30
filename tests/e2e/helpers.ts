@@ -33,6 +33,8 @@ export interface CatchState {
   /** The shaped stick the sim used this frame (world axes). */
   inputX: number;
   inputZ: number;
+  /** The largest grid-fin deflection drawn now (deg, from the stick; 0 without WebGL). */
+  visFinDeg: number;
 }
 
 /** True when two boxes overlap (by more than 1 px on both axes). */

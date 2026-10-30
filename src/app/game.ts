@@ -75,6 +75,8 @@ const SPLIT_CAMS: readonly CameraId[] = ['beach', 'towerTop', 'chase', 'wide'];
 const YAW_BLEND = 0.5;
 /** s: the player counts as steering for this long after the last stick deflection. */
 const STEER_MEMORY = 1.2;
+/** s: Cadet, steering closed: the "Steering opens…" / "Locked…" hint stays this long after release. */
+const STEER_HINT_HOLD = 1.0;
 /** One-word camera names for the touch camera tag. */
 const CAMERA_SHORT: Record<CameraId, string> = { towerTop: 'TOWER', beach: 'BEACH', chase: 'DRONE', onboard: 'ONBOARD', wide: 'WIDE' };
 /** The tutorial steer lesson, as shown in the steer banner next to the arrow (keys from the key map). */
@@ -190,6 +192,8 @@ export interface CatchTestState {
   /** The shaped stick the sim used this frame (world axes). */
   inputX: number;
   inputZ: number;
+  /** The largest grid-fin deflection drawn now (deg, from the stick; 0 without WebGL). */
+  visFinDeg: number;
 }
 
 declare global {
@@ -462,6 +466,7 @@ export class Game {
       aimZ: 0,
       inputX: 0,
       inputZ: 0,
+      visFinDeg: 0,
     };
   }
 
@@ -488,9 +493,9 @@ export class Game {
     f.classList.add('on');
   }
 
+  /** The prompts follow the last-used device (see InputDevices.padActive). */
   private inputKind(): InputKind {
-    if (this.devices.padActive) return 'pad';
-    return this.app.classList.contains('touch') ? 'touch' : 'keys';
+    return this.devices.promptKind(this.app.classList.contains('touch'));
   }
 
   /** The lesson words for the player's current key map. */
@@ -1447,6 +1452,11 @@ export class Game {
       const tone = cadet ? cadetPinTone(dist, w.flags.hover, cfg.pinWindow) : pinTone(dist, hp, cfg.pinWindow);
       pin = { dist, sx: sx / l, sz: sz / l, tone };
     }
+    // Cadet: the stick cannot move the aim before the divert or once it is locked for the catch
+    // (the sim holds it). A held key says why (STEER_HINT_HOLD after release) and the dot dims.
+    const steerShut =
+      cadet && !r.autopilot && !tut && !w.done && (w.phase === 'coast' || flying) && (!w.flags.divert || hp <= CADET_AIM_FREEZE);
+    const steerHeld = this.realTime - this.lastSteerReal < STEER_HINT_HOLD;
     const tiltDeg = tiltAngle(w.tilt) / RAD;
     const cue = w.phase === 'coast' && igniteIn !== null && igniteIn <= CUE_SECONDS ? Math.max(0, igniteIn) : null;
     const keys = this.buttonKeys();
@@ -1487,6 +1497,8 @@ export class Game {
       // From the divert until contact (it reads "On the ring" once the aim is centred).
       steerCue: cadet && !r.autopilot && pin !== null,
       wrongWay: cadet && !r.autopilot && this.wrongFor >= WRONG_WAY_DELAY,
+      steerLock: steerShut && steerHeld ? (w.flags.divert ? 'frozen' : 'early') : null,
+      inputLocked: steerShut,
       // Pilot / FD manage the fuel: a short PROP chip for the compact phone strip.
       propChip: cadet ? null : Math.min(1, w.propellant / prop0),
       foldBoard: cadet,
@@ -1595,6 +1607,7 @@ export class Game {
     s.aimZ = w && w.cfg.control === 'cadet' ? w.aim.z : 0;
     s.inputX = r ? r.stick.x : 0;
     s.inputZ = r ? r.stick.z : 0;
+    s.visFinDeg = this.view?.world.visFinDeg ?? 0;
   }
 
   private resize(): void {

@@ -73,6 +73,13 @@ export interface HudData {
   cueKey: string | null;
   /** Tutorial steer step: the lesson's instruction, shown in the steer banner (null: the default). */
   steerText?: string | null;
+  /**
+   * Cadet holds a steering key while steering is closed: 'early' before the divert, 'frozen'
+   * once the aim is locked for the catch. The steer banner says so (null: no hint).
+   */
+  steerLock?: 'early' | 'frozen' | null;
+  /** Cadet: steering is closed now, so the input indicator dims (it still lights). */
+  inputLocked?: boolean;
   /** Pilot / FD: propellant 0..1 for the short PROP chip (compact phone strip); null hides it. */
   propChip: number | null;
   /** Cadet: the board folds into one GO chip. */
@@ -147,7 +154,7 @@ export class Hud {
   private readonly divertKnob = el('span', { class: 'knob', text: '⇢' });
   private readonly divertFill = el('i');
   private readonly fault = el('div', { id: 'fault', 'data-testid': 'sensor-fault', role: 'alert', text: '⚠ TOWER SENSOR FAULT · stop gauge unreliable' });
-  private readonly captions = el('div', { id: 'captions', role: 'status', 'aria-live': 'polite' });
+  private readonly captions = el('div', { id: 'captions', 'data-testid': 'captions', role: 'status', 'aria-live': 'polite' });
   private readonly captionText = el('span');
   private readonly cameraTag = el('div', { id: 'camera-tag' });
   private readonly slowMo = el('div', { id: 'slowmo', text: '◷ SLOW-MO' });
@@ -496,8 +503,13 @@ export class Hud {
     }
 
     // Cadet steer cue: a big arrow from the aim point toward the ring centre, in screen space.
-    show(this.steer, d.steerCue && d.pin !== null);
-    if (d.steerCue && d.pin) {
+    // A key held while steering is closed shows why the aim does not move (no arrow).
+    const lock = d.steerLock ?? null;
+    show(this.steer, (d.steerCue && d.pin !== null) || lock !== null);
+    if (lock) {
+      setText(this.steerText, lock === 'early' ? '◷ Steering opens when the booster swings in' : 'Locked for the catch: hands steady');
+      if (this.steer.className !== 'locked') this.steer.className = 'locked';
+    } else if (d.steerCue && d.pin) {
       const on = d.pin.dist < CADET_ON_RING;
       const ang = (Math.atan2(d.pin.sz, d.pin.sx) * 180) / Math.PI;
       this.steerArrow.setAttribute('transform', `rotate(${ang.toFixed(0)})`);
@@ -542,6 +554,8 @@ export class Hud {
     // Input indicator: visible in flight; the keys also light it directly (drawInput).
     show(this.inputInd, d.input !== null);
     if (d.input) this.drawInput(d.input);
+    const locked = !!d.inputLocked;
+    if (this.inputInd.classList.contains('locked') !== locked) this.inputInd.classList.toggle('locked', locked);
     setText(this.lat, `${fmt(d.lat, 1)} m/s`);
     setText(this.prop, `${fmt(d.propFrac * 100)}% · ${fmt(d.propellantT, 1)} t`);
     this.propFill.style.width = `${fmt(d.propFrac * 100, 1)}%`;
@@ -628,6 +642,9 @@ export class Hud {
       this.catchBtn.classList.toggle('urgent', !d.armsClosing && d.catchTgo !== null && d.catchTgo < 4.5);
     }
     show(this.lightBtn, d.lightVisible);
+    // LIGHT (with its 3-2-1 cue) and STEP own the lower middle: the captions move clear of them (styles.css).
+    const action = d.lightVisible || d.stepVisible;
+    if (this.root.classList.contains('has-action') !== action) this.root.classList.toggle('has-action', action);
     setText(this.lightText, `${d.lightArmed ? 'LIGHT ✓' : 'LIGHT'}${d.keys ? ` · ${d.keys.light}` : ''}`);
     show(this.stepBtn, d.stepVisible);
     // Keyboard play: the mapped key in the badge and "STEP" in words; touch keeps the short form.

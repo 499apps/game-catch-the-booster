@@ -298,6 +298,38 @@ I could not run node, pnpm or git (the brief did not allow it). Nothing in c10 i
 
 **Baselines:** the input indicator is in the desktop strip, so `in-flight.png` changes on `chromium`, `firefox` and `webkit`. The phone baselines and `main-menu` / `debrief` do not change. Regenerate only after the e2e run passes.
 
+## c11: small controls follow-ups
+
+I could not run node, pnpm or git (the brief did not allow it). Nothing in c11 is verified.
+
+| # | Change | Files |
+| --- | --- | --- |
+| 1 | While LIGHT shows, the HUD root gets the `has-action` class. The captions then move to the top: 64 px from the top on desktop, and 68 px under the strip on touch (room for the Cadet steer banner). Landscape phones keep the captions at the bottom, clear of LIGHT. The captions have `data-testid="captions"`. | `src/ui/hud.ts`, `src/ui/styles.css` |
+| 2 | Prompts follow the last-used device. A game key down or a pointer / touch down clears `padActive`. A new pad press, or a stick that crosses 0.3, sets it. A held button or an axis that rests off centre does not set it again. A pad disconnect clears it. `InputDevices.promptKind()` gives the prompt kind; `game.ts` uses it. | `src/input/devices.ts`, `src/app/game.ts` |
+| 3 | Cadet, the sim does not change. When the player holds a steering key and steering is closed, the steer banner shows a hint. Before the divert it says "◷ Steering opens when the booster swings in". Below `CADET_AIM_FREEZE` it says "Locked for the catch: hands steady". The banner has the class `locked` and no arrow. The hint stays for 1 s after release (`STEER_HINT_HOLD`). While steering is closed, the INPUT indicator has the class `locked`: it lights, but at 45% opacity. | `src/app/game.ts`, `src/ui/hud.ts`, `src/ui/styles.css` |
+| 4 | Render only: the 0.04 s stick filter is gone. The bells now slew at 40°/s (`GIMBAL_RATE`) and the grid fins at 120°/s (`FIN_RATE`). The plume follows the bells. Stills and jumps (`dt` < 0 or > 1 s) snap, as before. `STICK_RATE` goes from 3 to 6 /s (full stick in 0.17 s). This also applies to the pad, touch and yaw ramps, but not to the autopilot. Test state: `visFinDeg` (the largest fin deflection drawn, degrees). | `src/render/scene.ts`, `src/input/mapping.ts`, `src/app/game.ts`, `tests/e2e/helpers.ts` |
+
+**Fin response (60 fps, on paper):**
+
+- Shaped stick: 0.35 at 100 ms, 0.71 at 167 ms and 0.93 at 250 ms. Before c11 it was about 0.15 at 100 ms, and the render filter came after that.
+- The fins are in an X layout (45° off the booster axes). A stick at 45° to the hinges gives 20° × 0.71 = 14° at full stick, and 4.9° at 100 ms. A stick square to one fin pair gives 20° at full stick, and 6.9° at 100 ms.
+- The rate limits do not bind on a keyboard ramp. They bind on a fast pad flick, and they stop a snap.
+
+**Tests:**
+
+- `input.test.ts`: new test. Pad stick → 'pad'. A key down → 'keys'. A stick held past the threshold does not take it back. A new pad press does. A pointer down → 'touch' on a touch screen. The shaper property test reads `STICK_RATE`, so it follows the new value. No unit test pinned the 0.33 s ramp.
+- `ux.spec.ts` (all projects): at the start of a Pilot run (`test=1&seed=4`), the caption box does not touch LIGHT, the 3-2-1 cue (if shown) or the strip.
+- `controls.spec.ts` (desktop): Pilot coast, D held → `visFinDeg > 3` less than 200 ms after the key down (timed in the page). Cadet (`test=1&seed=11`), D held right after Start → the steer banner says "Steering opens" in less than 300 ms. The indicator is `active` and `locked`, and the banner hides after release.
+- Golden tests: no change. They fly the autopilot, which does not use `InputShaper`.
+
+**Risks:**
+
+- The 200 ms fin check is frame-bound. On a very slow software-GL host (frames longer than about 150 ms) it can fail. Measure the frame time first, then relax the limit.
+- On touch, the captions sit 68 px under the strip while LIGHT shows. With a 3-row strip on a short phone, look for an overlap with the 3-2-1 cue.
+- The CATCH ring is not part of `has-action`. At 1024 px wide, a long caption can reach the left edge of the ring (about 16 px). Check `shots/desktop-1024*.png` in the burn.
+
+**Baselines:** no change is expected. The visual shots fly the autopilot (no lock dimming) and show no LIGHT pill (no caption move). The fins and bells snap in stills, as before.
+
 ## Commands for the operator (in order)
 
 1. `pnpm typecheck`

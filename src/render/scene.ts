@@ -164,8 +164,9 @@ export interface FrameState {
 const STICK_GIMBAL = 8 * (Math.PI / 180);
 const STICK_FIN = 20 * (Math.PI / 180);
 const STICK_PLUME = 4 * (Math.PI / 180);
-/** s: the stick visuals follow the stick through this first-order filter. */
-const STICK_VIS_TAU = 0.04;
+/** Actuator slew rates (rad/s): the bells gimbal at ~40°/s (8° in 0.2 s), the grid fins at ~120°/s (20° in ~0.17 s). */
+const GIMBAL_RATE = 40 * (Math.PI / 180);
+const FIN_RATE = 120 * (Math.PI / 180);
 
 // ---------------------------------------------------------------- geometry helpers
 
@@ -227,6 +228,11 @@ export class WorldScene {
   plumeMany = false;
   /** Plume brightness 0..1 (for the lens flare and exposure). */
   plumeLevel = 0;
+
+  /** The largest grid-fin deflection drawn now, in degrees (stick only, no twitch; for tests). */
+  get visFinDeg(): number {
+    return (Math.max(...this.finVis.map(Math.abs)) * 180) / Math.PI;
+  }
   private readonly sky: THREE.ShaderMaterial;
   private readonly water: THREE.ShaderMaterial;
   private readonly hullMat: THREE.MeshPhysicalMaterial;
@@ -244,9 +250,13 @@ export class WorldScene {
   private readonly plumeLight: THREE.PointLight;
   private readonly fins: THREE.InstancedMesh;
   private readonly bells: THREE.InstancedMesh;
-  /** The filtered stick for the visuals (world x/z) and the render time it was last moved at. */
-  private readonly stickVis = { x: 0, z: 0 };
-  private stickT = -1e9;
+  /**
+   * The actuators as drawn (render only): the bell gimbal (rad, booster frame x/z, the way the
+   * bells swing), each grid fin's deflection (rad) and the render time they last moved at.
+   */
+  private readonly gimbalVis = { x: 0, z: 0 };
+  private readonly finVis = [0, 0, 0, 0];
+  private actT = -1e9;
   private readonly stickLocal = new THREE.Vector3();
   private readonly gimbalQ = new THREE.Quaternion();
   private readonly plumeQ = new THREE.Quaternion();
@@ -1087,30 +1097,30 @@ export class WorldScene {
     this.booster.quaternion.copy(this.tmpQ);
     this.booster.updateMatrixWorld();
 
-    // ---- Stick visuals (render only): a fast filter, so a held key shows in ~0.1 s ----
-    const sdt = f.t - this.stickT;
-    const sv = this.stickVis;
-    if (sdt < 0 || sdt > 1) {
-      sv.x = f.stick.x;
-      sv.z = f.stick.z;
-    } else if (sdt > 0) {
-      const a = 1 - Math.exp(-sdt / STICK_VIS_TAU);
-      sv.x += (f.stick.x - sv.x) * a;
-      sv.z += (f.stick.z - sv.z) * a;
-    }
-    this.stickT = f.t;
+    // ---- Stick visuals (render only): the bells and fins slew to the stick at actuator rates ----
+    const sdt = f.t - this.actT;
+    const actSnap = sdt < 0 || sdt > 1; // still frames and jumps: the actuators are already there
+    this.actT = f.t;
     // The stick in the booster's own frame (it is tilted and rolled).
     this.tmpQ2.copy(this.booster.quaternion).invert();
-    const sl = this.stickLocal.set(sv.x, 0, sv.z).applyQuaternion(this.tmpQ2);
+    const sl = this.stickLocal.set(f.stick.x, 0, f.stick.z).applyQuaternion(this.tmpQ2);
     const sLen = Math.hypot(sl.x, sl.z);
-    const sMag = Math.min(1, sLen);
-    if (sMag > 1e-4) {
-      // The bells and the plume swing opposite to the stick.
-      const ux = -sl.x / sLen;
-      const uz = -sl.z / sLen;
-      const g = STICK_GIMBAL * sMag;
+    // The bells swing opposite to the stick, up to STICK_GIMBAL at full stick.
+    const gk = sLen > 1e-4 ? (STICK_GIMBAL * Math.min(1, sLen)) / sLen : 0;
+    const gv = this.gimbalVis;
+    const gdx = -sl.x * gk - gv.x;
+    const gdz = -sl.z * gk - gv.z;
+    const gd = Math.hypot(gdx, gdz);
+    const gs = actSnap || gd <= GIMBAL_RATE * sdt ? 1 : (GIMBAL_RATE * sdt) / gd;
+    gv.x += gdx * gs;
+    gv.z += gdz * gs;
+    const g = Math.hypot(gv.x, gv.z);
+    if (g > 1e-6) {
+      // The plume swings with the bells.
+      const ux = gv.x / g;
+      const uz = gv.z / g;
       this.gimbalQ.setFromUnitVectors(DOWN, this.tmpV.set(ux * Math.sin(g), -Math.cos(g), uz * Math.sin(g)));
-      const p = STICK_PLUME * sMag;
+      const p = g * (STICK_PLUME / STICK_GIMBAL);
       this.plumeQ.setFromUnitVectors(DOWN, this.tmpV.set(ux * Math.sin(p), -Math.cos(p), uz * Math.sin(p)));
     } else {
       this.gimbalQ.identity();
@@ -1239,13 +1249,17 @@ export class WorldScene {
     if (this.wetSand) this.wetSand.uniforms['uTime']!.value = f.t;
 
     // Grid fins: a tiny high-frequency twitch, plus the stick (each fin turns about its own
-    // radial hinge by the part of the stick across it).
+    // radial hinge by the part of the stick across it, slewing at FIN_RATE).
     for (let i = 0; i < 4; i++) {
       const a = this.finAngles[i] ?? 0;
       const tw = f.reducedMotion ? 0 : 0.05 * Math.sin(f.t * 37 + i * 1.7) * Math.sin(f.t * 5.3 + i);
       const across = Math.max(-1, Math.min(1, -sl.x * Math.sin(a) + sl.z * Math.cos(a)));
+      const target = STICK_FIN * across;
+      const prev = this.finVis[i] ?? 0;
+      const fin = actSnap ? target : prev + Math.max(-FIN_RATE * sdt, Math.min(FIN_RATE * sdt, target - prev));
+      this.finVis[i] = fin;
       this.tmpQ2.setFromAxisAngle(UP, -a);
-      this.tmpQ.setFromAxisAngle(this.tmpV.set(1, 0, 0), tw + STICK_FIN * across);
+      this.tmpQ.setFromAxisAngle(this.tmpV.set(1, 0, 0), tw + fin);
       this.tmpQ2.multiply(this.tmpQ);
       this.tmpM.compose(this.tmpV2.set(Math.cos(a) * (R + 0.15), TOP_Y - 3.5, Math.sin(a) * (R + 0.15)), this.tmpQ2, this.one);
       this.fins.setMatrixAt(i, this.tmpM);

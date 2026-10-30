@@ -718,6 +718,15 @@ summary:focus-visible {
   bottom: auto;
   top: calc(100% + 8px);
 }
+/* Cadet, steering closed (before the divert, or locked for the catch): the words, no arrow. */
+#steer-cue.locked {
+  padding-left: 14px;
+  border-color: var(--line);
+  color: #dbe6ef;
+}
+#steer-cue.locked .steer-dial {
+  display: none;
+}
 /* A push that does not move the aim: the arrow pulses (a gentle glow with reduced motion). */
 #steer-cue.wrong {
   border-color: #fff;
@@ -771,6 +780,13 @@ summary:focus-visible {
 }
 #telemetry .input-ind.active .dot {
   fill: #fff;
+}
+/* Cadet, steering closed: the keys still light the dial, dimmed, so it reads "not now". */
+#telemetry .input-ind.locked .input-dial {
+  opacity: 0.45;
+}
+#telemetry .input-ind.locked .dot {
+  fill: #8fa6bb;
 }
 /* Touch has its own stick visual: the indicator is for keyboard and gamepad play. */
 .touch #telemetry .input-ind {
@@ -1011,6 +1027,16 @@ summary:focus-visible {
 }
 #captions.coach .radio {
   color: #ffd25e;
+}
+/* LIGHT and its 3-2-1 cue own the lower middle (final approach): the captions move to the top,
+   clear of the camera tag (no PiP or fault card shows before ignition). */
+#hud.has-action #captions {
+  top: calc(var(--st) + 64px);
+  bottom: auto;
+}
+/* Touch (strip at the top): under the strip, with room for the Cadet steer banner docked there. */
+.touch #hud.has-action #captions {
+  top: calc(var(--strip-bottom, calc(var(--st) + 130px)) + 68px);
 }
 #camera-tag {
   position: absolute;
@@ -1879,7 +1905,9 @@ summary:focus-visible {
     top: calc(var(--st) + 96px);
     width: clamp(120px, 22vw, 200px);
   }
-  .touch #captions {
+  .touch #captions,
+  .touch #hud.has-action #captions {
+    top: auto;
     bottom: calc(var(--sb) + 14px);
     max-width: 52vw;
   }

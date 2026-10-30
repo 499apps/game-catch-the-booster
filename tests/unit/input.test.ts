@@ -34,6 +34,9 @@ class FakeWindow {
     const e = { code, repeat: false, target: null, preventDefault: (): void => undefined };
     for (const fn of this.handlers.get(type) ?? []) fn(e);
   }
+  fire(type: string): void {
+    for (const fn of this.handlers.get(type) ?? []) fn({ target: null });
+  }
 }
 
 const pad = (axes: number[], pressed: number[] = [], values: Record<number, number> = {}): PadState => ({
@@ -192,6 +195,30 @@ describe('raw intent (the HUD input indicator)', () => {
     expect(dev.rawIntent().z).toBe(1); // reading it does not consume the tap
     dev.sample(1 / 60);
     expect(dev.rawIntent().z).toBe(0);
+  });
+
+  it('prompts follow the last-used device: pad use shows pad prompts, a key brings the keys back', () => {
+    const win = new FakeWindow();
+    const dev = new InputDevices(win as unknown as Window);
+    let gp = { index: 0, connected: true, ...pad([0, 0, 0, 0]) };
+    win.navigator.getGamepads = (): (Gamepad | null)[] => [gp as unknown as Gamepad];
+    dev.sample(1 / 60);
+    expect(dev.promptKind(false)).toBe('keys'); // a connected, idle pad does not win
+    gp = { ...gp, ...pad([0.8, 0, 0, 0]) };
+    dev.sample(1 / 60);
+    expect(dev.padActive).toBe(true);
+    expect(dev.promptKind(false)).toBe('pad');
+    win.key('keydown', 'KeyD');
+    expect(dev.promptKind(false)).toBe('keys');
+    // The stick still held past the threshold does not take it back; a new pad press does.
+    dev.sample(1 / 60);
+    expect(dev.promptKind(false)).toBe('keys');
+    gp = { ...gp, ...pad([0.8, 0, 0, 0], [0]) };
+    dev.sample(1 / 60);
+    expect(dev.promptKind(true)).toBe('pad');
+    // A pointer / touch down: touch prompts on a touch screen.
+    win.fire('pointerdown');
+    expect(dev.promptKind(true)).toBe('touch');
   });
 
   it('follows a remapped key map', () => {

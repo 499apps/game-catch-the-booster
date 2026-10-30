@@ -81,6 +81,87 @@ test('Pilot: a held key tilts the booster during the coast', async ({ page }) =>
   await expect.poll(async () => (await state(page)).tau, { timeout: 5_000 }).not.toBeNull();
 });
 
+/**
+ * Times, in the page itself, from the first real `code` keydown to the first animation frame
+ * where the condition holds ('fins': the fins pass 3°; 'steerOpens': the steer banner says
+ * "Steering opens"). Returns a getter for { kd, at } (0 = not yet).
+ */
+async function timeFromKey(page: Page, code: string, done: 'fins' | 'steerOpens'): Promise<() => Promise<{ kd: number; at: number }>> {
+  await page.evaluate(
+    ({ code, done }) => {
+      const w = window as unknown as { __kd: number; __at: number; __catch?: { visFinDeg: number } };
+      w.__kd = 0;
+      w.__at = 0;
+      window.addEventListener(
+        'keydown',
+        (e) => {
+          if (e.code === code && !w.__kd) w.__kd = performance.now();
+        },
+        { capture: true },
+      );
+      const test = (): boolean => {
+        if (done === 'fins') return (w.__catch?.visFinDeg ?? 0) > 3;
+        const e = document.querySelector<HTMLElement>('[data-testid="steer-cue"]');
+        return !!e && !e.hidden && (e.textContent ?? '').includes('Steering opens');
+      };
+      const tick = (): void => {
+        if (w.__kd && !w.__at && test()) w.__at = performance.now();
+        if (!w.__at) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    },
+    { code, done },
+  );
+  return () =>
+    page.evaluate(() => {
+      const w = window as unknown as { __kd: number; __at: number };
+      return { kd: w.__kd, at: w.__at };
+    });
+}
+
+test('Pilot: a held key swings the grid fins past 3° within 200 ms (actuator rates, no extra filter)', async ({ page, browserName }) => {
+  const s = await openGame(page, 'test=1&seed=4');
+  test.skip(!s.webgl, `WebGL2 is not available in headless ${browserName} on this host; the fins are not drawn.`);
+  await startTier(page, 'pilot');
+  await expect(page.getByTestId('light-btn')).toBeVisible({ timeout: 5_000 });
+  expect((await state(page)).phase).toBe('coast');
+  expect((await state(page)).visFinDeg).toBeLessThan(1);
+  const timing = await timeFromKey(page, 'KeyD', 'fins');
+  await page.keyboard.down('KeyD');
+  await expect.poll(async () => (await timing()).at, { timeout: 5_000 }).toBeGreaterThan(0);
+  const t = await timing();
+  const s1 = await state(page);
+  await page.keyboard.up('KeyD');
+  await page.keyboard.press('Enter');
+  expect(t.kd).toBeGreaterThan(0);
+  expect(t.at - t.kd, `fins at ${s1.visFinDeg.toFixed(1)}°`).toBeLessThan(200);
+  // Full swing for a sideways stick on the X fin layout: about 20° x cos 45°, never past 20°.
+  expect(s1.visFinDeg).toBeLessThanOrEqual(20.01);
+});
+
+test('Cadet: a key held before the divert says when steering opens, and the input dot dims', async ({ page }) => {
+  // Test hooks skip the first-run tutorial, so the Cadet run flies at once.
+  await openGame(page, 'test=1&seed=11');
+  await startTier(page, 'cadet');
+  const cue = page.getByTestId('steer-cue');
+  const ind = page.getByTestId('input-indicator');
+  await expect(ind).toBeVisible({ timeout: 5_000 });
+  expect((await state(page)).phase).toBe('coast');
+  await expect(cue).toBeHidden();
+  const timing = await timeFromKey(page, 'KeyD', 'steerOpens');
+  await page.keyboard.down('KeyD');
+  await expect.poll(async () => (await timing()).at, { timeout: 5_000 }).toBeGreaterThan(0);
+  const t = await timing();
+  expect(t.at - t.kd).toBeLessThan(300);
+  await expect(cue).toContainText('Steering opens');
+  // The keys still light the indicator, dimmed: "not now".
+  await expect(ind).toHaveClass(/active/);
+  await expect(ind).toHaveClass(/locked/);
+  await page.keyboard.up('KeyD');
+  // The hint stays about 1 s after release, then hides.
+  await expect(cue).toBeHidden({ timeout: 4_000 });
+});
+
 test('Cadet: the arrow key moves the aim, and a sideways key moves it too', async ({ page }, info) => {
   test.skip(info.project.name !== 'chromium', 'A 20 s flight to the divert: desktop Chromium only (speed budget).');
   test.setTimeout(180_000);
