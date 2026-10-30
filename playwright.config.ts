@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const PORT = 4173;
+// PW_PORT lets this run beside another vite preview (e.g. the hub) on 4173.
+const PORT = Number(process.env.PW_PORT ?? 4173);
 const BASE = `http://localhost:${PORT}/games/catch-the-booster/`;
 
 // Headless Chromium needs SwiftShader allowed explicitly for WebGL (no GPU in CI-like runs).
@@ -45,7 +46,7 @@ export default defineConfig({
     actionTimeout: 20_000,
   },
   webServer: {
-    command: 'pnpm exec vite preview --port 4173 --strictPort',
+    command: `pnpm exec vite preview --port ${PORT} --strictPort`,
     url: BASE,
     reuseExistingServer: false,
     timeout: 60_000,
