@@ -738,6 +738,58 @@ summary:focus-visible {
     transform: scale(1.25);
   }
 }
+/* Input indicator: a dial with the stick dot, four arrow wedges and throttle marks. The
+   wedges light the moment a key goes down (no animation, so reduced motion needs no change). */
+#telemetry .input-ind {
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+}
+.input-dial {
+  width: 46px;
+  height: 33px;
+  flex: none;
+}
+.input-dial .dial {
+  fill: rgba(0, 0, 0, 0.3);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.input-dial .wedge,
+.input-dial .thr {
+  fill: #33465a;
+}
+.input-dial .dot {
+  fill: #8fa6bb;
+}
+.input-dial .wedge.on,
+.input-dial .thr.on {
+  fill: var(--warn);
+}
+#telemetry .input-ind.active .dial {
+  stroke: var(--warn);
+}
+#telemetry .input-ind.active .dot {
+  fill: #fff;
+}
+/* Touch has its own stick visual: the indicator is for keyboard and gamepad play. */
+.touch #telemetry .input-ind {
+  display: none;
+}
+/* The 3-2-1 cue's key line ("Press Enter to LIGHT"), under the count. */
+#ign-cue .n,
+#ign-cue .how {
+  display: block;
+  text-align: center;
+}
+#ign-cue .how {
+  margin-top: 2px;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--warn);
+  white-space: nowrap;
+}
 /* The short PROP chip is for the compact phone strip only (desktop has the PROP cell). */
 #telemetry .prop-chip {
   display: none;
@@ -1247,8 +1299,9 @@ summary:focus-visible {
   background: rgba(255, 255, 255, 0.06);
   font-size: 15px;
 }
-/* Dim the strip's readouts, but not the steer banner docked to it (the lesson lives there). */
-.tutorial #telemetry > :not(#steer-cue) {
+/* Dim the strip's readouts, but not the steer banner docked to it (the lesson lives there) or
+   the input indicator (it shows the keys answer). */
+.tutorial #telemetry > :not(#steer-cue):not(#input-ind) {
   opacity: 0.35;
 }
 /* Desktop, steer step: a narrow card docked top right, clear of the practice booster (the
@@ -1692,6 +1745,7 @@ summary:focus-visible {
   #telemetry .c-speed,
   #telemetry .c-prop,
   #telemetry .cell.small,
+  #telemetry .input-ind,
   #stop-gauge,
   #telemetry .bar,
   #telemetry .gust,

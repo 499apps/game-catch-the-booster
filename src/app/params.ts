@@ -32,7 +32,7 @@ export interface Hooks {
   stick: number;
   /** Still mode with `manual`: `stick=arrow` holds full stick along the HUD steer arrow. */
   stickArrow: boolean;
-  /** Still mode with `manual`: `stick=away` holds full stick against the arrow ("Other way"). */
+  /** Still mode with `manual`: `stick=away` holds full stick against the arrow ("Away from the ring"). */
   stickAway: boolean;
 }
 

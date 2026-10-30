@@ -6,6 +6,7 @@ import {
   NEUTRAL_INPUT,
   commandFor,
   createWorld,
+  inputAt,
   makeRng,
   next,
   pinHeightAboveRails,
@@ -54,6 +55,13 @@ describe('input log', () => {
         xs.forEach((x, i) => expect(p.at(i).stickX + 0).toBe(x + 0));
       }),
     );
+  });
+  it('inputAt (random access, for the replay stick visuals) agrees with the player at every step', () => {
+    const { log } = recordCadet(7);
+    expect(log.entries.length).toBeGreaterThan(2);
+    const p = new InputPlayer(log);
+    const last = log.entries[log.entries.length - 1]?.step ?? 0;
+    for (let s = 0; s <= last + 5; s++) expect(inputAt(log, s)).toEqual(p.at(s));
   });
   it('is sparse: unchanged inputs are not stored', () => {
     const rec = new InputRecorder();

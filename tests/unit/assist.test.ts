@@ -2,8 +2,11 @@
 // Pilot is fair to a plain human strategy (no oracle, a reaction delay, a shaky hand).
 import { describe, expect, it } from 'vitest';
 import {
+  CADET_AIM_FREEZE,
   CADET_AIM_MAX,
   CADET_AIM_RATE,
+  CADET_AIM_SLOW,
+  cadetAimRate,
   COM_ABOVE_BASE,
   DT,
   TIER_CONFIG,
@@ -47,8 +50,10 @@ type CadetHands = 'off' | 'aim' | 'slam' | 'hold' | 'away';
  *        centre, in proportion to its distance, with a 0.1 m dead band.
  *  slam: a kid who holds full stick along the HUD arrow (aim -> ring centre, as the HUD now
  *        draws it) from the moment it shows, and keeps following it.
- *  hold: a kid who pushes full stick the way the arrow first pointed and never lets go.
- *  away: full stick away from the ring the whole time (the worst a player can do).
+ *  hold: a kid who pushes full stick the way the arrow first pointed and never lets go (the
+ *        aim goes past the centre to the far edge of the aim limit).
+ *  away: full stick away from the ring the whole time (the aim goes to the near edge of the
+ *        aim limit: the worst a player can do).
  */
 function flyCadet(seed: number, hands: CadetHands): World {
   const w = createWorld(seed, 'cadet');
@@ -80,6 +85,13 @@ function flyCadet(seed: number, hands: CadetHands): World {
   return w;
 }
 
+/** A hands-off Cadet run flown to the divert start (the stick moves the aim from here). */
+function toDivert(seed: number): World {
+  const w = createWorld(seed, 'cadet');
+  while (!w.flags.divert && !w.done) stepWorld(w, commandFor(w, NEUTRAL_INPUT, false));
+  return w;
+}
+
 describe('Cadet: the divert swings in by itself; the stick moves its aim point', () => {
   it('the hands-off aim point is small, seeded and inside the aim limit', () => {
     const limit = cadetAimLimit(TIER_CONFIG.cadet.pinWindow);
@@ -91,10 +103,10 @@ describe('Cadet: the divert swings in by itself; the stick moves its aim point',
       expect(cadetAimOffset(seed)).toEqual(a);
       expect(createWorld(seed, 'cadet').aim).toEqual(a);
     }
-    expect(CADET_AIM_RATE).toBeCloseTo(1, 9);
+    expect(CADET_AIM_RATE).toBeCloseTo(2.5, 9);
   });
 
-  it('the aim point moves at most 1 m/s, stays inside the limit, and freezes near the rails', () => {
+  it('pushed away the whole time, the aim stays inside the limit and the Cadet still catches', () => {
     const w = flyCadet(3, 'away');
     expect(w.outcome?.caught).toBe(true);
     expect(Math.hypot(w.aim.x, w.aim.z)).toBeLessThanOrEqual(cadetAimLimit(w.cfg.pinWindow) + 1e-9);
@@ -103,6 +115,64 @@ describe('Cadet: the divert swings in by itself; the stick moves its aim point',
     const a0 = { ...v.aim };
     for (let i = 0; i < 240; i++) stepWorld(v, commandFor(v, { ...NEUTRAL_INPUT, stickX: 1 }, false));
     expect(v.aim).toEqual(a0);
+  });
+
+  it('the stick moves the aim in any direction at up to 2.5 m/s, inside cadetAimLimit', () => {
+    const dirs = [
+      { x: 1, z: 0 },
+      { x: -1, z: 0 },
+      { x: 0, z: 1 },
+      { x: 0, z: -1 },
+      { x: Math.SQRT1_2, z: -Math.SQRT1_2 },
+    ];
+    for (const seed of [1, 2, 5]) {
+      const base = toDivert(seed);
+      const limit = cadetAimLimit(base.cfg.pinWindow);
+      expect(pinHeightAboveRails(base.pos, base.tilt), `seed ${seed}: the divert starts high`).toBeGreaterThan(CADET_AIM_SLOW);
+      for (const d of dirs) {
+        // From the ring centre, 0.2 s of full stick: 0.5 m the way the stick points.
+        const w = structuredClone(base);
+        w.aim = { x: 0, z: 0 };
+        for (let i = 0; i < 24; i++) stepWorld(w, commandFor(w, { ...NEUTRAL_INPUT, stickX: d.x, stickZ: d.z }, false));
+        expect(w.aim.x, `seed ${seed} (${d.x}, ${d.z})`).toBeCloseTo(d.x * CADET_AIM_RATE * 24 * DT, 6);
+        expect(w.aim.z, `seed ${seed} (${d.x}, ${d.z})`).toBeCloseTo(d.z * CADET_AIM_RATE * 24 * DT, 6);
+        // Held for 3 s it stops at the limit, never past it.
+        for (let i = 0; i < 360; i++) {
+          stepWorld(w, commandFor(w, { ...NEUTRAL_INPUT, stickX: d.x, stickZ: d.z }, false));
+          expect(Math.hypot(w.aim.x, w.aim.z)).toBeLessThanOrEqual(limit + 1e-9);
+        }
+        expect(Math.hypot(w.aim.x, w.aim.z)).toBeCloseTo(limit, 6);
+      }
+    }
+  });
+
+  it('a sideways push (across the arrow) moves the aim too', () => {
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const w = toDivert(seed);
+      const a0 = { ...w.aim };
+      const d = Math.hypot(a0.x, a0.z);
+      // Perpendicular to the arrow (aim -> centre): neither toward nor away from the ring.
+      const side = { stickX: -a0.z / d, stickZ: a0.x / d };
+      for (let i = 0; i < 60; i++) stepWorld(w, commandFor(w, { ...NEUTRAL_INPUT, ...side }, false));
+      const moved = Math.hypot(w.aim.x - a0.x, w.aim.z - a0.z);
+      expect(moved, `seed ${seed}`).toBeGreaterThan(0.5);
+      expect(moved, `seed ${seed}`).toBeLessThanOrEqual(CADET_AIM_RATE * 60 * DT + 1e-9);
+    }
+  });
+
+  it('the aim freezes below CADET_AIM_FREEZE, and the rate fades just above it', () => {
+    expect(cadetAimRate(CADET_AIM_FREEZE)).toBe(0);
+    expect(cadetAimRate(CADET_AIM_FREEZE - 1)).toBe(0);
+    expect(cadetAimRate(CADET_AIM_SLOW + 1)).toBeCloseTo(CADET_AIM_RATE, 9);
+    expect(cadetAimRate(CADET_AIM_FREEZE + 0.01)).toBeGreaterThan(0);
+    const w = createWorld(4, 'cadet');
+    while (!w.done && !(w.flags.divert && pinHeightAboveRails(w.pos, w.tilt) <= CADET_AIM_FREEZE)) {
+      stepWorld(w, commandFor(w, NEUTRAL_INPUT, false));
+    }
+    expect(w.done).toBe(false);
+    const a0 = { ...w.aim };
+    for (let i = 0; i < 60 && !w.done; i++) stepWorld(w, commandFor(w, { ...NEUTRAL_INPUT, stickX: 1, stickZ: 1 }, false));
+    expect(w.aim).toEqual(a0);
   });
 
   it('flown hands-off, it reaches the arms inside the window on most seeds', () => {
@@ -135,48 +205,43 @@ describe('Cadet: the divert swings in by itself; the stick moves its aim point',
     expect(steered, report.join(' | ')).toBeGreaterThan(alone);
   });
 
-  it('full stick along the HUD arrow (followed, or held the first way) never scores worse than hands-off', () => {
+  it('full stick along the HUD arrow (followed) never scores worse than hands-off; held past the centre it still catches', () => {
     const report: string[] = [];
     for (let seed = 1; seed <= 8; seed++) {
       const off = scoreWorld(flyCadet(seed, 'off'));
-      for (const hands of ['slam', 'hold'] as const) {
-        const w = flyCadet(seed, hands);
-        const s = scoreWorld(w);
-        report.push(`${seed} ${hands}: ${off.alignment} -> ${s.alignment} (${w.outcome?.reason ?? 'caught'})`);
-        expect(w.outcome?.caught, report.join(' | ')).toBe(true);
-        expect(s.alignment, report.join(' | ')).toBeGreaterThanOrEqual(off.alignment);
-        // The other parts (contact speed, load, fuel) may differ by a few points of noise.
-        expect(s.total, report.join(' | ')).toBeGreaterThanOrEqual(off.total - 10);
-      }
+      // Followed: the arrow turns as the aim moves, so the aim settles on the centre.
+      const w = flyCadet(seed, 'slam');
+      const s = scoreWorld(w);
+      report.push(`${seed} slam: ${off.alignment} -> ${s.alignment} (${w.outcome?.reason ?? 'caught'})`);
+      expect(w.outcome?.caught, report.join(' | ')).toBe(true);
+      expect(s.alignment, report.join(' | ')).toBeGreaterThanOrEqual(off.alignment);
+      // The other parts (contact speed, load, fuel) may differ by a few points of noise.
+      expect(s.total, report.join(' | ')).toBeGreaterThanOrEqual(off.total - 10);
+      // Held the first way and never released: the aim goes past the centre to the far edge.
+      // That can score worse than hands-off (the input matters), but it still catches.
+      const h = flyCadet(seed, 'hold');
+      report.push(`${seed} hold: ${scoreWorld(h).alignment} (${h.outcome?.reason ?? 'caught'})`);
+      expect(h.outcome?.caught, report.join(' | ')).toBe(true);
     }
   });
 
-  it('one key of a diagonal arrow still brings the aim in (radial projection); the opposite key does nothing', () => {
+  it('one key of a diagonal arrow brings the aim in; the opposite key moves it away (the input matters)', () => {
     for (const seed of [1, 2, 3, 4, 5]) {
-      const w = createWorld(seed, 'cadet');
-      while (!w.flags.divert && !w.done) stepWorld(w, commandFor(w, NEUTRAL_INPUT, false));
+      const w = toDivert(seed);
       const a0 = Math.hypot(w.aim.x, w.aim.z);
       // The single axis that points most at the centre (the key a child presses first).
       const alongX = Math.abs(w.aim.x) >= Math.abs(w.aim.z);
       const key = alongX ? { stickX: -Math.sign(w.aim.x), stickZ: 0 } : { stickX: 0, stickZ: -Math.sign(w.aim.z) };
       const wrong = { stickX: -key.stickX, stickZ: -key.stickZ };
       const v = structuredClone(w);
-      for (let i = 0; i < 60; i++) stepWorld(v, commandFor(v, { ...NEUTRAL_INPUT, ...wrong }, false));
-      expect(Math.hypot(v.aim.x, v.aim.z), `seed ${seed} wrong key`).toBeCloseTo(a0, 9);
-      for (let i = 0; i < 60; i++) stepWorld(w, commandFor(w, { ...NEUTRAL_INPUT, ...key }, false));
-      // 0.5 s at 1 m/s, at least cos 45 deg of it toward the centre (or all the way in).
-      expect(Math.hypot(w.aim.x, w.aim.z), `seed ${seed} one key`).toBeLessThan(Math.max(0, a0 - 0.3) + 1e-6);
-    }
-  });
-
-  it('the stick only ever brings the aim closer to the ring centre', () => {
-    const w = createWorld(2, 'cadet');
-    let last = Infinity;
-    while (!w.done && w.step < 120 * 90) {
-      stepWorld(w, commandFor(w, { ...NEUTRAL_INPUT, stickX: 1, stickZ: -0.4 }, false));
-      const a = Math.hypot(w.aim.x, w.aim.z);
-      expect(a).toBeLessThanOrEqual(last + 1e-12);
-      last = a;
+      for (let i = 0; i < 24; i++) stepWorld(v, commandFor(v, { ...NEUTRAL_INPUT, ...wrong }, false));
+      const limit = cadetAimLimit(v.cfg.pinWindow);
+      // Away: farther out (or held at the limit if it started there).
+      expect(Math.hypot(v.aim.x, v.aim.z), `seed ${seed} wrong key`).toBeGreaterThanOrEqual(Math.min(a0 + 0.1, limit) - 1e-6);
+      for (let i = 0; i < 24; i++) stepWorld(w, commandFor(w, { ...NEUTRAL_INPUT, ...key }, false));
+      // 0.2 s at 2.5 m/s = 0.5 m along one axis: at least 0.2 m closer from 1 m or more out at
+      // 45 deg (or within 0.5 m of the centre if it passes it).
+      expect(Math.hypot(w.aim.x, w.aim.z), `seed ${seed} one key`).toBeLessThan(Math.max(a0 - 0.2, 0.5) + 1e-6);
     }
   });
 

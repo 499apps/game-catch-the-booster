@@ -13,13 +13,28 @@ import {
   mapKeyboard,
   mapTouch,
   mergeIntents,
+  presetKeys,
   rateLimit,
   rotateStick,
   worldToScreen,
   type PadState,
   type RawIntent,
 } from '../../src/input/mapping';
+import { InputDevices } from '../../src/input/devices';
 import { NEUTRAL_INPUT, TIER_CONFIG, commandFor, createWorld, leverToThrottle } from '../../src/sim';
+
+/** A stand-in for `window`: it keeps the listeners so a test can fire key events. */
+class FakeWindow {
+  readonly navigator = { getGamepads: (): (Gamepad | null)[] => [] };
+  private readonly handlers = new Map<string, ((e: unknown) => void)[]>();
+  addEventListener(type: string, fn: (e: unknown) => void): void {
+    this.handlers.set(type, [...(this.handlers.get(type) ?? []), fn]);
+  }
+  key(type: 'keydown' | 'keyup', code: string): void {
+    const e = { code, repeat: false, target: null, preventDefault: (): void => undefined };
+    for (const fn of this.handlers.get(type) ?? []) fn(e);
+  }
+}
 
 const pad = (axes: number[], pressed: number[] = [], values: Record<number, number> = {}): PadState => ({
   axes,
@@ -137,6 +152,54 @@ describe('smoothing and rate limits', () => {
         },
       ),
     );
+  });
+});
+
+describe('raw intent (the HUD input indicator)', () => {
+  it('reflects held keys at once, before any smoothing, and tells listeners', () => {
+    const win = new FakeWindow();
+    const dev = new InputDevices(win as unknown as Window);
+    let calls = 0;
+    dev.onRawChange(() => calls++);
+    expect(dev.rawIntent()).toEqual({ x: 0, z: 0, throttle: 0 });
+    win.key('keydown', 'KeyD');
+    expect(calls).toBe(1);
+    expect(dev.rawIntent()).toEqual({ x: 1, z: 0, throttle: 0 });
+    // The shaped stick ramps (rate limit + smoothing); the raw intent does not.
+    expect(dev.sample(1 / 60).stickX).toBeLessThan(0.1);
+    expect(dev.rawIntent().x).toBe(1);
+    win.key('keydown', 'KeyW');
+    win.key('keydown', 'ShiftLeft');
+    expect(dev.rawIntent()).toEqual({ x: 1, z: -1, throttle: 1 });
+    win.key('keyup', 'KeyD');
+    win.key('keyup', 'KeyW');
+    win.key('keyup', 'ShiftLeft');
+    dev.sample(1 / 60);
+    expect(dev.rawIntent()).toEqual({ x: 0, z: 0, throttle: 0 });
+    expect(calls).toBe(6);
+    // Ctrl lowers the throttle; the arrows steer too.
+    win.key('keydown', 'ControlLeft');
+    win.key('keydown', 'ArrowLeft');
+    expect(dev.rawIntent()).toEqual({ x: -1, z: 0, throttle: -1 });
+  });
+
+  it('a tap shorter than a frame still shows until the next sample, without being used up', () => {
+    const win = new FakeWindow();
+    const dev = new InputDevices(win as unknown as Window);
+    win.key('keydown', 'KeyS');
+    win.key('keyup', 'KeyS');
+    expect(dev.rawIntent().z).toBe(1);
+    expect(dev.rawIntent().z).toBe(1); // reading it does not consume the tap
+    dev.sample(1 / 60);
+    expect(dev.rawIntent().z).toBe(0);
+  });
+
+  it('follows a remapped key map', () => {
+    const win = new FakeWindow();
+    const dev = new InputDevices(win as unknown as Window);
+    dev.setKeyMap({ ...presetKeys('standard'), tiltRight: ['KeyL'] });
+    win.key('keydown', 'KeyL');
+    expect(dev.rawIntent().x).toBe(1);
   });
 });
 

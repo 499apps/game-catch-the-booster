@@ -79,7 +79,7 @@ export const PILOT_HOLD_FADE = 15;
 /** rad: above this tilt on 3 engines, attitude has priority: the stick is ignored until upright. */
 export const PILOT_RIGHTING_TILT = 20 * RAD;
 /** rad/s of tilt rate at full stick while coasting (no thrust: the fins hold the attitude). */
-export const PILOT_COAST_TILT_RATE = 0.105;
+export const PILOT_COAST_TILT_RATE = 0.18; // c10: was 0.105 (6 deg/s), too weak to feel; ~10 deg/s reads at once
 
 export const leverToThrottle = (lever: number): number =>
   THROTTLE_MIN + (THROTTLE_MAX - THROTTLE_MIN) * clamp(lever, 0, 1);

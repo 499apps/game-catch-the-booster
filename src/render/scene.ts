@@ -153,11 +153,24 @@ export interface FrameState {
   sinceCutoff?: number | null;
   /** Main-menu hero shot: a warmer, stronger rim from the low sun. */
   hero: boolean;
+  /**
+   * The shaped stick the sim flew with this frame (world x/z, -1..1; from the replay log in
+   * replays). Render only: the gimballed bells, the grid fins and the plume answer it at once.
+   */
+  stick: { x: number; z: number };
 }
+
+/** Stick visuals (render only): full stick gives these deflections. */
+const STICK_GIMBAL = 8 * (Math.PI / 180);
+const STICK_FIN = 20 * (Math.PI / 180);
+const STICK_PLUME = 4 * (Math.PI / 180);
+/** s: the stick visuals follow the stick through this first-order filter. */
+const STICK_VIS_TAU = 0.04;
 
 // ---------------------------------------------------------------- geometry helpers
 
 const UP = new THREE.Vector3(0, 1, 0);
+const DOWN = new THREE.Vector3(0, -1, 0);
 
 /** A box beam from a to b with a w x d cross-section. */
 function beam(a: THREE.Vector3, b: THREE.Vector3, w: number, d = w): THREE.BufferGeometry {
@@ -230,6 +243,13 @@ export class WorldScene {
   private readonly nozzleGlow: THREE.Sprite;
   private readonly plumeLight: THREE.PointLight;
   private readonly fins: THREE.InstancedMesh;
+  private readonly bells: THREE.InstancedMesh;
+  /** The filtered stick for the visuals (world x/z) and the render time it was last moved at. */
+  private readonly stickVis = { x: 0, z: 0 };
+  private stickT = -1e9;
+  private readonly stickLocal = new THREE.Vector3();
+  private readonly gimbalQ = new THREE.Quaternion();
+  private readonly plumeQ = new THREE.Quaternion();
   private readonly particles: THREE.Mesh;
   private readonly pGeo: THREE.InstancedBufferGeometry;
   private readonly pPos: Float32Array;
@@ -347,6 +367,7 @@ export class WorldScene {
     const bellGeo = new THREE.LatheGeometry(bellProfile, 18);
     const bellMat = new THREE.MeshStandardMaterial({ color: '#3a3330', metalness: 0.8, roughness: 0.4, side: THREE.DoubleSide });
     const bells = new THREE.InstancedMesh(bellGeo, bellMat, ENGINE_COUNT + OUTER_ENGINES);
+    this.bells = bells;
     const glowGeo = new THREE.CircleGeometry(0.52, 18).rotateX(Math.PI / 2);
     this.glows = new THREE.InstancedMesh(glowGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }), ENGINE_COUNT);
     let bi = 0;
@@ -1066,6 +1087,48 @@ export class WorldScene {
     this.booster.quaternion.copy(this.tmpQ);
     this.booster.updateMatrixWorld();
 
+    // ---- Stick visuals (render only): a fast filter, so a held key shows in ~0.1 s ----
+    const sdt = f.t - this.stickT;
+    const sv = this.stickVis;
+    if (sdt < 0 || sdt > 1) {
+      sv.x = f.stick.x;
+      sv.z = f.stick.z;
+    } else if (sdt > 0) {
+      const a = 1 - Math.exp(-sdt / STICK_VIS_TAU);
+      sv.x += (f.stick.x - sv.x) * a;
+      sv.z += (f.stick.z - sv.z) * a;
+    }
+    this.stickT = f.t;
+    // The stick in the booster's own frame (it is tilted and rolled).
+    this.tmpQ2.copy(this.booster.quaternion).invert();
+    const sl = this.stickLocal.set(sv.x, 0, sv.z).applyQuaternion(this.tmpQ2);
+    const sLen = Math.hypot(sl.x, sl.z);
+    const sMag = Math.min(1, sLen);
+    if (sMag > 1e-4) {
+      // The bells and the plume swing opposite to the stick.
+      const ux = -sl.x / sLen;
+      const uz = -sl.z / sLen;
+      const g = STICK_GIMBAL * sMag;
+      this.gimbalQ.setFromUnitVectors(DOWN, this.tmpV.set(ux * Math.sin(g), -Math.cos(g), uz * Math.sin(g)));
+      const p = STICK_PLUME * sMag;
+      this.plumeQ.setFromUnitVectors(DOWN, this.tmpV.set(ux * Math.sin(p), -Math.cos(p), uz * Math.sin(p)));
+    } else {
+      this.gimbalQ.identity();
+      this.plumeQ.identity();
+    }
+    for (let i = 0; i < ENGINE_COUNT; i++) {
+      const [x, z] = this.layout[i] ?? [0, 0];
+      this.tmpM.compose(this.tmpV2.set(x, BASE_Y, z), this.gimbalQ, this.one);
+      this.bells.setMatrixAt(i, this.tmpM);
+      // The nozzle-exit glow swings with its bell.
+      this.tmpV.set(0, -0.55, 0).applyQuaternion(this.gimbalQ);
+      this.tmpM.compose(this.tmpV2.set(x + this.tmpV.x, BASE_Y + this.tmpV.y, z + this.tmpV.z), this.gimbalQ, this.one);
+      this.glows.setMatrixAt(i, this.tmpM);
+    }
+    this.bells.instanceMatrix.needsUpdate = true;
+    this.glows.instanceMatrix.needsUpdate = true;
+    this.envelope.quaternion.copy(this.plumeQ);
+
     // ---- Engines ----
     let lit = 0;
     const levels = this.levels;
@@ -1088,11 +1151,7 @@ export class WorldScene {
       this.glows.setColorAt(i, level > 0 ? this.tmpC.setRGB(0.3 + 0.7 * level, 0.12 + 0.5 * level, 0.05 + 0.2 * level) : this.tmpC.setRGB(0.03, 0.03, 0.03));
       // 3 engines: a long pillar (about a booster length), as in the footage.
       const len = lit > 3 ? 20 + 8 * thr : 88 + 28 * thr;
-      this.tmpM.compose(
-        this.tmpV2.set(x, BASE_Y - 1.5, z),
-        this.tmpQ2.identity(),
-        this.tmpV.set(level, len * level, level),
-      );
+      this.tmpM.compose(this.tmpV2.set(x, BASE_Y - 1.5, z), this.plumeQ, this.tmpV.set(level, len * level, level));
       this.cores.setMatrixAt(i, this.tmpM);
     }
     if (this.glows.instanceColor) this.glows.instanceColor.needsUpdate = true;
@@ -1179,12 +1238,14 @@ export class WorldScene {
     }
     if (this.wetSand) this.wetSand.uniforms['uTime']!.value = f.t;
 
-    // Grid fin twitch (high frequency, tiny).
+    // Grid fins: a tiny high-frequency twitch, plus the stick (each fin turns about its own
+    // radial hinge by the part of the stick across it).
     for (let i = 0; i < 4; i++) {
       const a = this.finAngles[i] ?? 0;
       const tw = f.reducedMotion ? 0 : 0.05 * Math.sin(f.t * 37 + i * 1.7) * Math.sin(f.t * 5.3 + i);
+      const across = Math.max(-1, Math.min(1, -sl.x * Math.sin(a) + sl.z * Math.cos(a)));
       this.tmpQ2.setFromAxisAngle(UP, -a);
-      this.tmpQ.setFromAxisAngle(this.tmpV.set(1, 0, 0), tw);
+      this.tmpQ.setFromAxisAngle(this.tmpV.set(1, 0, 0), tw + STICK_FIN * across);
       this.tmpQ2.multiply(this.tmpQ);
       this.tmpM.compose(this.tmpV2.set(Math.cos(a) * (R + 0.15), TOP_Y - 3.5, Math.sin(a) * (R + 0.15)), this.tmpQ2, this.one);
       this.fins.setMatrixAt(i, this.tmpM);

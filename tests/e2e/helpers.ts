@@ -24,6 +24,15 @@ export interface CatchState {
   tutorial: string | null;
   muted: boolean;
   drawCalls: number;
+  /** Booster tilt (sin components, world x/z). */
+  tiltX: number;
+  tiltZ: number;
+  /** Cadet aim point (m, world x/z); 0 in the other tiers. */
+  aimX: number;
+  aimZ: number;
+  /** The shaped stick the sim used this frame (world axes). */
+  inputX: number;
+  inputZ: number;
 }
 
 /** True when two boxes overlap (by more than 1 px on both axes). */

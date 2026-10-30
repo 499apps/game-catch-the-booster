@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { PRAISE_TIME, READY_TIME, STEER_TIME, STEP_HINT, Tutorial, type TutorialInput } from '../../src/app/tutorial';
-import { tutorialLine } from '../../src/ui/tutorialView';
+import { keyWords, tutorialLine } from '../../src/ui/tutorialView';
+import { presetKeys, rebind } from '../../src/input/mapping';
 
 const idle: TutorialInput = { stick: 0, ignite: false, closeArms: false };
 const DT = 1 / 60;
@@ -9,6 +10,23 @@ const DT = 1 / 60;
 function run(t: Tutorial, seconds: number, inp: TutorialInput = idle): void {
   for (let s = 0; s < seconds; s += DT) t.update(DT, inp);
 }
+
+describe('keyboard lessons name the real keys', () => {
+  it('standard and one-hand presets', () => {
+    expect(keyWords(presetKeys('standard'))).toEqual({ steer: 'A, D, W or S (or the arrows)', light: 'Enter', catch: 'Space' });
+    expect(keyWords(presetKeys('onehand'))).toEqual({ steer: 'A, D, W or S', light: 'F', catch: 'Space' });
+  });
+  it('remapped keys show in the lesson text', () => {
+    let km = rebind(presetKeys('standard'), 'tiltRight', 'KeyL');
+    km = rebind(km, 'ignite', 'KeyF');
+    km = rebind(km, 'catch', 'KeyB');
+    const w = keyWords(km);
+    expect(w.steer).toBe('A, L, W or S');
+    expect(tutorialLine('steer', 'keys', w)).toContain('Hold A, L, W or S');
+    expect(tutorialLine('light', 'keys', w)).toContain('press F');
+    expect(tutorialLine('catch', 'keys', w)).toContain('Press B');
+  });
+});
 
 describe('Cadet tutorial', () => {
   it('teaches one idea at a time: steer, light, catch, ready', () => {

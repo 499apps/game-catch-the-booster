@@ -35,7 +35,7 @@ import { makeArms, makeRails, staticCompression, startClose, updateArms, updateR
 import type { FailReason, FlightCommand, HealthBoard, Phase, SimEvent, World } from './types';
 import { makeWind, meanWindSpeed, updateWind } from './wind';
 import { clampLen2, len2, tiltAngle, type Vec3 } from './vec';
-import { CADET_AIM_FREEZE, CADET_AIM_RATE, cadetAimLimit, cadetAimOffset } from './autopilot';
+import { CADET_AIM_RATE, cadetAimLimit, cadetAimOffset, cadetAimRate } from './autopilot';
 
 export interface WorldOptions {
   noAero?: boolean;
@@ -202,25 +202,22 @@ function handleCommands(w: World, cmd: FlightCommand): void {
 }
 
 /**
- * Cadet: the stick's component toward the ring centre moves the divert aim point at up to
- * CADET_AIM_RATE, never more than pinWindow - CADET_AIM_MARGIN from it, and it freezes in the last
- * metres. The autopilot always flies the booster, so no stick input can make a Cadet slide,
- * miss or score worse than hands-off.
+ * Cadet: from the divert start, the stick moves the divert aim point in any direction at up
+ * to CADET_AIM_RATE (fading near the rails, see cadetAimRate), never more than
+ * pinWindow - CADET_AIM_MARGIN from the ring centre, and it freezes in the last metres. The
+ * autopilot always flies the booster, so no stick input can make a Cadet slide or miss. A
+ * push away from the ring scores worse than hands-off: the input matters.
  */
 function updateCadetAim(w: World, cmd: FlightCommand, dt: number): void {
   const r = cmd.aimRate;
   if (!r || w.cfg.control !== 'cadet' || !w.flags.divert) return;
-  if (pinHeightAboveRails(w.pos, w.tilt) <= CADET_AIM_FREEZE) return;
-  const d = Math.hypot(w.aim.x, w.aim.z);
-  if (d < 1e-9) return;
-  // Only the part of the stick that points at the ring centre moves the aim (a radial
-  // projection), and never past the centre. So one key of a diagonal arrow still helps,
-  // a wrong-way push does nothing, and no input can score worse than hands-off.
+  if (r.x === 0 && r.z === 0) return; // hands off: the aim stays exactly where it is
+  const rate = cadetAimRate(pinHeightAboveRails(w.pos, w.tilt));
+  if (rate <= 0) return;
+  // aimRate is the stick times CADET_AIM_RATE; scale it to the rate allowed at this height.
   const v = clampLen2(r, CADET_AIM_RATE);
-  const ux = -w.aim.x / d;
-  const uz = -w.aim.z / d;
-  const step = Math.min(Math.max(0, v.x * ux + v.z * uz) * dt, d);
-  w.aim = clampLen2({ x: w.aim.x + ux * step, z: w.aim.z + uz * step }, cadetAimLimit(w.cfg.pinWindow));
+  const k = rate / CADET_AIM_RATE;
+  w.aim = clampLen2({ x: w.aim.x + v.x * k * dt, z: w.aim.z + v.z * k * dt }, cadetAimLimit(w.cfg.pinWindow));
 }
 
 function boardData(b: HealthBoard): Record<string, boolean> {

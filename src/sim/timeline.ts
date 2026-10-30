@@ -2,7 +2,7 @@
 // a frame every few steps. The replay player scrubs it, the debrief draws its graphs.
 import { COM_ABOVE_BASE, DT } from './constants';
 import { countLit } from './engines';
-import { runSim, type RunOptions } from './replay';
+import { emptyLog, runSim, type InputLog, type RunOptions } from './replay';
 import type { ScoreBreakdown } from './scoring';
 import type { EngineState, Phase, SimEvent, World } from './types';
 import type { Vec2, Vec3 } from './vec';
@@ -36,6 +36,8 @@ export interface Timeline {
   events: SimEvent[];
   world: World;
   score: ScoreBreakdown;
+  /** The input log the run was flown with (the replay draws the stick from it). */
+  log: InputLog;
 }
 
 /** Steps between frames: 4 steps at 120 Hz = 30 frames per sim second. */
@@ -82,6 +84,7 @@ export function buildTimeline(o: RunOptions, stride = TIMELINE_STRIDE): Timeline
     events: w.events,
     world: w,
     score: res.score,
+    log: o.log ?? emptyLog(),
   };
 }
 

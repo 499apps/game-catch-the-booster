@@ -24,19 +24,33 @@ export const KD_VERT = 1.8;
  * Cadet: the divert flies itself, but its aim point starts off the centre by this much (m,
  * a seeded direction), so the booster lands inside the 3 m window with no input and the
  * stick earns the Bullseye. The stick never adds velocity: it only moves the aim point
- * (World.aim, see world.ts), and the autopilot keeps full control of the flight.
+ * (World.aim, see world.ts) in any direction, and the autopilot keeps full control of the
+ * flight. A push away from the ring can score worse than hands-off, but never miss.
  */
 export const CADET_AIM_MIN = 1.0;
 export const CADET_AIM_MAX = 2.2;
 /** m/s: the fastest the Cadet stick moves the aim point (full stick). */
-export const CADET_AIM_RATE = 1.0;
+export const CADET_AIM_RATE = 2.5;
 /** m: the aim point stays this far inside the edge of the pin window, whatever the stick does. */
 export const CADET_AIM_MARGIN = 0.8;
 /** m of pin height: below this the aim point freezes, so the booster settles before contact. */
 export const CADET_AIM_FREEZE = 8;
+/**
+ * m of pin height: below this the aim rate fades toward CADET_AIM_SLOW_K of full at the
+ * freeze height, so a late push cannot leave the booster sliding or tilted at contact.
+ */
+export const CADET_AIM_SLOW = 40;
+export const CADET_AIM_SLOW_K = 0.4;
 
 /** Largest distance of the Cadet aim point from the arm centreline (m). */
 export const cadetAimLimit = (pinWindow: number): number => Math.max(0, pinWindow - CADET_AIM_MARGIN);
+
+/** m/s: the full-stick Cadet aim rate at this pin height (0 at and below the freeze height). */
+export function cadetAimRate(pinHeight: number): number {
+  if (pinHeight <= CADET_AIM_FREEZE) return 0;
+  const k = Math.min(1, (pinHeight - CADET_AIM_FREEZE) / (CADET_AIM_SLOW - CADET_AIM_FREEZE));
+  return CADET_AIM_RATE * (CADET_AIM_SLOW_K + (1 - CADET_AIM_SLOW_K) * k);
+}
 // s: press CATCH when predicted contact <= close time + this. The arms then finish
 // ~1 s before contact with the pins ~2-3 m above the rails (window 0-20 m).
 export const PRESS_LEAD = 1.2;

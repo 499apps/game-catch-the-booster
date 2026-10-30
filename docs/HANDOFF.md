@@ -262,6 +262,42 @@ I could not run node, pnpm or git (the brief did not allow it). Nothing in c9 is
 
 **Baselines:** the plume, the sky, the land, the ring and the tutorial pill change the visual baselines. Regenerate them only after the e2e run passes.
 
+## c10: keyboard controls feel immediate and obvious
+
+I could not run node, pnpm or git (the brief did not allow it). Nothing in c10 is verified.
+
+**Root cause.** The keys worked, but the player could not see a result:
+
+- Cadet: the stick moved an invisible aim point, only toward the ring centre, at 1 m/s, and only after the divert. Any other key did nothing.
+- Pilot: in the coast, full stick asks for a tilt rate of only 0.105 rad/s. On 13 engines it adds only a 3° bias.
+- The booster model did not move when a key went down, and the HUD did not show the held keys.
+
+| # | Change | Files |
+| --- | --- | --- |
+| 1 | Input indicator in the strip (`data-testid="input-indicator"`): a dial with a stick dot, four arrow wedges and throttle ▲/▼ marks. A key down or up redraws it in the key handler, not on the next frame. It reads the raw held input (`InputDevices.rawIntent()`, screen axes) and sets `data-x`, `data-z` and the `active` class. It shows in flight only. Touch and the compact phone strip do not show it (touch has its own stick). No animation. | `src/input/devices.ts`, `src/ui/hud.ts`, `src/ui/styles.css` |
+| 2 | Render only: the 13 gimballed bells (up to 8°), their nozzle glows, the four grid fins (up to 20°) and the plume (up to 4°) follow the shaped stick through a 0.04 s filter. The bells and the plume swing opposite to the stick. The stick comes in `FrameState.stick`: from the last sim step live, from the input log in replays (`inputAt`, `Timeline.log`), and 0 in stills and menus. | `src/render/scene.ts`, `src/app/game.ts`, `src/sim/replay.ts`, `src/sim/timeline.ts` |
+| 3 | Cadet: from the divert start, the stick moves the aim point in any direction at up to 2.5 m/s (`CADET_AIM_RATE`). The aim stays inside `cadetAimLimit` (2.2 m) and freezes below 8 m of pin height. New: between 40 m and 8 m the rate fades to 40% (`cadetAimRate`), so a late push cannot leave the booster sliding at contact. Hands-off runs do not change. A push away from the ring now scores worse: the input matters. The HUD says "Away from the ring ↺ · push along the arrow" only when the push points away (cosine with the aim offset above 0.3). A sideways push says nothing. | `src/sim/autopilot.ts`, `src/sim/world.ts`, `src/app/game.ts`, `src/ui/hud.ts` |
+| 4 | Key prompts from the real key map: the tutorial card, the spoken lines and the steer banner (`keyWords`). Keyboard play: LIGHT reads "LIGHT · ↵", STEP has the mapped key and "STEP 13 → 3", and the CATCH ring reads "Space · 3.2 s". While LIGHT shows, the 3-2-1 cue adds "Press Enter to LIGHT" (every tier). | `src/ui/tutorialView.ts`, `src/app/game.ts`, `src/ui/hud.ts`, `src/ui/styles.css` |
+| 5 | Test state: `tiltX`, `tiltZ`, `aimX`, `aimZ`, `inputX`, `inputZ`. The steer cue also has `data-sx` and `data-sz` (the arrow in screen axes). | `src/app/game.ts`, `tests/e2e/helpers.ts`, `src/ui/hud.ts` |
+
+**Tests:**
+
+- `assist.test.ts`: the aim moves in 5 directions at 2.5 m/s and stops at the limit; a sideways push moves it; it freezes below `CADET_AIM_FREEZE`. Changed on purpose: the "hold the first way" kid now goes past the centre, so the test asks only for a catch (no score check). The "opposite key does nothing" and "only ever closer" tests are replaced: the opposite key now moves the aim away.
+- `input.test.ts`: `rawIntent` shows held keys at once (the shaped stick is still near 0), keeps a short tap until the next sample, and follows a remapped key.
+- `replay.test.ts`: `inputAt` agrees with `InputPlayer` at every step.
+- `tutorial.test.ts`: the lessons name the standard, one-hand and remapped keys.
+- New `tests/e2e/controls.spec.ts` (desktop projects; real `page.keyboard`): the indicator lights less than 150 ms after the key down and clears on release; in the Pilot coast, 1 s of D tilts the booster more than sin 2° along the shaped stick; in Cadet (Chromium only), the arrow key moves the aim more than 1 m and a key across it moves the aim more than 0.5 m.
+- Golden tests: no change. They fly the autopilot, which ignores the stick.
+
+**Risks:**
+
+- The Cadet "away" and "hold" runs move the aim to the 2.2 m edge on every seed. If one of them misses or slides, send me the report line. Then lower `CADET_AIM_SLOW_K` or raise `CADET_AIM_SLOW`.
+- The Pilot coast tilt e2e needs about 0.035 rad in 1 s of sim time. The command is 0.105 rad/s. If the coast attitude loop is slow, the margin is small.
+- The plume and bells swing opposite to the stick, as the brief asks. A real gimbal swings the nozzle exit toward the stick side. To change it, flip the sign of `ux` and `uz` in `WorldScene.update`.
+- On the desktop strip the indicator adds about 90 px, so the strip can wrap to a second row sooner.
+
+**Baselines:** the input indicator is in the desktop strip, so `in-flight.png` changes on `chromium`, `firefox` and `webkit`. The phone baselines and `main-menu` / `debrief` do not change. Regenerate only after the e2e run passes.
+
 ## Commands for the operator (in order)
 
 1. `pnpm typecheck`

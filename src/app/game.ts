@@ -4,7 +4,7 @@
 import { AudioEngine, type Sfx } from '../audio/audio';
 import { Voice } from '../audio/voice';
 import { InputDevices } from '../input/devices';
-import { CATCH_HOLD, DIVERT_HOLD, lerpAngle, worldToScreen } from '../input/mapping';
+import { CATCH_HOLD, DIVERT_HOLD, keyLabel, lerpAngle, worldToScreen } from '../input/mapping';
 import {
   AutoDirector,
   BEACH_CAM,
@@ -39,7 +39,7 @@ import { countRunning } from '../sim/engines';
 import { makeGoNoGo } from '../sim/gonogo';
 import { pinHeightAboveRails, pinPosition, stopHeight, timeToContact, uprightPinOffset } from '../sim/predictor';
 import { T_DIVERT, T_DIVERT_END, idealIgnitionHeight } from '../sim/reference';
-import { InputRecorder } from '../sim/replay';
+import { InputRecorder, inputAt } from '../sim/replay';
 import type { ScoreBreakdown } from '../sim/scoring';
 import { buildTimeline, flightSeries, frameAt, type Timeline, type TimelineFrame } from '../sim/timeline';
 import { TIER_CONFIG, type TierId } from '../sim/tiers';
@@ -56,7 +56,7 @@ import { cadetPinTone, pinTone, tiltTone, type Tone } from '../ui/tolerance';
 import { Menu, type DebriefData } from '../ui/menu';
 import { ReplayBar } from '../ui/replaybar';
 import { TouchControls, isTouchDevice } from '../ui/touch';
-import { TutorialView, tutorialLine, type InputKind } from '../ui/tutorialView';
+import { TutorialView, keyWords, tutorialLine, type InputKind, type KeyWords } from '../ui/tutorialView';
 import type { Hooks } from './params';
 import { ReplayClock } from './scrubber';
 import { defaultSettings, loadBest, loadSettings, saveBest, saveSettings, type Settings } from './storage';
@@ -77,14 +77,17 @@ const YAW_BLEND = 0.5;
 const STEER_MEMORY = 1.2;
 /** One-word camera names for the touch camera tag. */
 const CAMERA_SHORT: Record<CameraId, string> = { towerTop: 'TOWER', beach: 'BEACH', chase: 'DRONE', onboard: 'ONBOARD', wide: 'WIDE' };
-/** The tutorial steer lesson, as shown in the steer banner next to the arrow. */
-const STEER_LESSON: Record<InputKind, string> = {
-  touch: 'Drag the pad the way the arrow points',
-  keys: 'Hold A, D, W or S the way the arrow points',
-  pad: 'Push the stick the way the arrow points',
-};
-/** s: a pushed stick that has not moved the Cadet aim for this long shows "Other way". */
+/** The tutorial steer lesson, as shown in the steer banner next to the arrow (keys from the key map). */
+function steerLesson(kind: InputKind, keys: KeyWords): string {
+  if (kind === 'touch') return 'Drag the pad the way the arrow points';
+  if (kind === 'pad') return 'Push the stick the way the arrow points';
+  return `Hold ${keys.steer} the way the arrow points`;
+}
+/** s: a stick that moves the Cadet aim away from the ring for this long shows "Away from the ring". */
 const WRONG_WAY_DELAY = 0.4;
+/** A push counts as "away from the ring" when its cosine with the aim offset is above this (sideways is fine). */
+const AWAY_COS = 0.3;
+const NO_STICK: Readonly<Vec2> = Object.freeze({ x: 0, z: 0 });
 /** The 3-2-1 ignition cue shows from this many seconds before the ideal ignition. */
 const CUE_SECONDS = 3.5;
 /** m/s^2: the gentle braking the V/S tone allows for (reach 2 m/s at the rails from here). */
@@ -102,6 +105,8 @@ interface Practice {
   world: World;
   /** The state at the start of the practice, to loop back to. */
   start: World;
+  /** The shaped stick (world axes) the practice flew with this frame. */
+  stick: Vec2;
 }
 
 interface Run {
@@ -126,6 +131,8 @@ interface Run {
   frozen: boolean;
   /** Cadet tapped LIGHT before the mark: the HUD shows "armed"; the auto ignition lights on time. */
   lightArmed: boolean;
+  /** The shaped stick (world axes) of the last sim step (the booster's bells and fins show it). */
+  stick: Vec2;
 }
 
 interface ReplayState {
@@ -174,6 +181,15 @@ export interface CatchTestState {
   tutorial: string | null;
   muted: boolean;
   drawCalls: number;
+  /** Booster tilt (sin components, world x/z). */
+  tiltX: number;
+  tiltZ: number;
+  /** Cadet aim point (m, world x/z); 0 in the other tiers. */
+  aimX: number;
+  aimZ: number;
+  /** The shaped stick the sim used this frame (world axes). */
+  inputX: number;
+  inputZ: number;
 }
 
 declare global {
@@ -236,9 +252,8 @@ export class Game {
   private yawBlend = 1;
   private yawCam: CameraId | null = null;
   private lastSteerReal = -1e9;
-  /** Cadet "Other way": seconds the stick has been pushed while the aim did not move. */
+  /** Cadet "Away from the ring": seconds the stick has pushed the aim away from the ring centre. */
   private wrongFor = 0;
-  private lastAimDist = 0;
   private practice: Practice | null = null;
   private manualCam: CameraId | null = null;
   private camera: CameraId = 'wide';
@@ -441,6 +456,12 @@ export class Game {
       tutorial: null,
       muted: this.settings.muted,
       drawCalls: 0,
+      tiltX: 0,
+      tiltZ: 0,
+      aimX: 0,
+      aimZ: 0,
+      inputX: 0,
+      inputZ: 0,
     };
   }
 
@@ -470,6 +491,23 @@ export class Game {
   private inputKind(): InputKind {
     if (this.devices.padActive) return 'pad';
     return this.app.classList.contains('touch') ? 'touch' : 'keys';
+  }
+
+  /** The lesson words for the player's current key map. */
+  private keyWords(): KeyWords {
+    return keyWords(this.settings.keys);
+  }
+
+  /** Keyboard play: the key labels for the LIGHT, STEP and CATCH buttons (null on touch / pad). */
+  private buttonKeys(): HudData['keys'] {
+    if (this.inputKind() !== 'keys') return null;
+    const k = this.settings.keys;
+    const label = (codes: readonly string[], fallback: string): string => {
+      const c = codes[0];
+      if (!c) return fallback;
+      return c === 'Enter' ? '↵' : keyLabel(c);
+    };
+    return { light: label(k.ignite, '?'), step: label(k.stepDown, '?'), catch: label(k.catch, '?') };
   }
 
   // ---------------------------------------------------------------- UI keys
@@ -536,7 +574,7 @@ export class Game {
     this.hud.clearCaption();
     this.director.reset();
     this.view?.resetCameras();
-    this.speak(tutorialLine('steer', this.inputKind()));
+    this.speak(tutorialLine('steer', this.inputKind(), this.keyWords()));
   }
 
   /**
@@ -548,7 +586,7 @@ export class Game {
     let guard = 0;
     while (!w.done && guard++ < 120 * 60) {
       const tau = tauOf(w);
-      if (tau !== null && w.flags.divert && tau >= T_DIVERT + 0.5) return { world: w, start: structuredClone(w) };
+      if (tau !== null && w.flags.divert && tau >= T_DIVERT + 0.5) return { world: w, start: structuredClone(w), stick: { x: 0, z: 0 } };
       stepWorld(w, commandFor(w, NEUTRAL_INPUT, false));
     }
     return null;
@@ -558,6 +596,7 @@ export class Game {
   private stepPractice(p: Practice, input: PilotInput, seconds: number): void {
     const n = Math.min(240, Math.round(seconds / DT));
     const inp = { ...NEUTRAL_INPUT, stickX: input.stickX, stickZ: input.stickZ };
+    p.stick = { x: input.stickX, z: input.stickZ };
     for (let i = 0; i < n; i++) {
       const tau = tauOf(p.world);
       if (p.world.done || (tau !== null && tau > T_DIVERT_END)) p.world = structuredClone(p.start);
@@ -630,6 +669,7 @@ export class Game {
       debriefShown: false,
       frozen: false,
       lightArmed: false,
+      stick: { x: 0, z: 0 },
     };
     this.paused = false;
     this.menu.setMode('playing');
@@ -736,11 +776,17 @@ export class Game {
       }
       r.recorder.record(w.step, inp);
       stepWorld(w, commandFor(w, inp, r.autopilot));
+      r.stick.x = inp.stickX;
+      r.stick.z = inp.stickZ;
       r.acc -= DT;
       steps++;
     }
     if (steps >= MAX_STEPS_PER_FRAME) r.acc = 0;
-    if (w.done) r.acc = 0;
+    if (w.done) {
+      r.acc = 0;
+      r.stick.x = 0;
+      r.stick.z = 0;
+    }
     this.processEvents(r);
   }
 
@@ -775,20 +821,22 @@ export class Game {
   }
 
   /**
-   * Cadet: the stick is pushed but the aim point does not move (the push points away from the
-   * ring), measured each frame. After WRONG_WAY_DELAY the HUD pulses the arrow: "Other way".
+   * Cadet: the stick (world axes) pushes the aim point away from the ring centre, measured each
+   * frame. A sideways push is fine and says nothing. After WRONG_WAY_DELAY the HUD pulses the
+   * arrow: "Away from the ring".
    */
-  private updateWrongWay(w: World, dt: number, push = this.devices.rawStick): void {
+  private updateWrongWay(w: World, dt: number, stick: Readonly<Vec2>): void {
     const a = Math.hypot(w.aim.x, w.aim.z);
-    const moved = Math.abs(a - this.lastAimDist) > 1e-6;
-    this.lastAimDist = a;
+    const s = Math.hypot(stick.x, stick.z);
     const canMove =
       w.cfg.control === 'cadet' &&
       w.flags.divert &&
       !w.done &&
       a >= CADET_ON_RING &&
       pinHeightAboveRails(w.pos, w.tilt) > CADET_AIM_FREEZE;
-    this.wrongFor = canMove && push > 0.3 && !moved ? this.wrongFor + dt : 0;
+    // The aim offset points away from the centre: a push along it moves the aim away.
+    const away = s > 0.3 && (stick.x * w.aim.x + stick.z * w.aim.z) / (s * a || 1) > AWAY_COS;
+    this.wrongFor = canMove && away ? this.wrongFor + dt : 0;
   }
 
   /**
@@ -1112,7 +1160,7 @@ export class Game {
         });
         if (t.step === 'steer' && this.practice) {
           this.stepPractice(this.practice, input, dt * this.hooks.timescale);
-          this.updateWrongWay(this.practice.world, dt);
+          this.updateWrongWay(this.practice.world, dt, this.practice.stick);
         }
         if (t.step !== before) {
           if (before === 'steer') {
@@ -1121,15 +1169,15 @@ export class Game {
             this.director.reset();
             this.view?.resetCameras();
           }
-          this.speak(tutorialLine(t.step, this.inputKind()));
+          this.speak(tutorialLine(t.step, this.inputKind(), this.keyWords()));
         }
-        this.tutorialView.update(t, this.inputKind());
+        this.tutorialView.update(t, this.inputKind(), this.keyWords());
         if (t.finished) this.endTutorial();
       } else {
         if (r.tier === 'cadet' && !r.autopilot && input.ignite && r.world.phase === 'coast') r.lightArmed = true;
         const scale = this.hooks.timescale * (slowMoActive(r.world) ? SLOW_MO : 1);
         if (!r.world.done) this.stepRun(r, input, dt * scale);
-        this.updateWrongWay(r.world, dt);
+        this.updateWrongWay(r.world, dt, r.stick);
         if (r.world.done) this.finishRun(r);
         this.devices.rumble(r.world.done ? 0 : engineFrac(r.world.engines), now);
       }
@@ -1146,7 +1194,7 @@ export class Game {
     splash: FrameState['splash'],
     aids: FrameState['aids'],
     hero: boolean,
-    after: { impact: number | null; vent: number; sinceCutoff?: number | null; divert?: boolean },
+    after: { impact: number | null; vent: number; sinceCutoff?: number | null; divert?: boolean; stick?: Readonly<Vec2> },
   ): { frame: FrameState; shot: ShotInput } {
     const thrustFrac = src.thrust / (ENGINE_COUNT * ENGINE_THRUST);
     const reduced = this.reducedMotion;
@@ -1166,6 +1214,7 @@ export class Game {
       vent: after.vent,
       sinceCutoff: after.sinceCutoff ?? null,
       hero,
+      stick: after.stick ?? NO_STICK,
     };
     const shot: ShotInput = {
       com: pos,
@@ -1227,7 +1276,10 @@ export class Game {
     }
     const tauNow = tauOf(w);
     const divert = flying && tauNow !== null && tauNow >= T_DIVERT && !w.arms.closing;
-    return this.makeFrame(srcFromWorld(w), t, pos, splash, aids, hero, { impact, vent, sinceCutoff, divert });
+    // The stick the sim flew with: the practice booster's in the tutorial, else the run's.
+    let stick: Readonly<Vec2> = NO_STICK;
+    if (active && r && !w.done) stick = this.practice && w === this.practice.world ? this.practice.stick : r.stick;
+    return this.makeFrame(srcFromWorld(w), t, pos, splash, aids, hero, { impact, vent, sinceCutoff, divert, stick });
   }
 
   /** The frame for the replay player at its clock time. */
@@ -1247,11 +1299,18 @@ export class Game {
     const vent = f.phase === 'caught' || f.phase === 'settling' ? 1 : 0;
     const sinceCutoff = contact !== null && rp.clock.t >= contact ? rp.clock.t - contact : null;
     const divert = (f.phase === 'burn13' || f.phase === 'burn3') && f.tau !== null && f.tau >= T_DIVERT && !f.armsClosing;
+    // The stick from the input log, so the bells and fins move as they did live.
+    let stick: Readonly<Vec2> = NO_STICK;
+    if (rp.clock.t < tl.duration) {
+      const inp = inputAt(tl.log, Math.floor(rp.clock.t / DT + 1e-9));
+      stick = { x: inp.stickX, z: inp.stickZ };
+    }
     const { frame, shot } = this.makeFrame(src, rp.clock.t, pos, splash, this.noAids(TIER_CONFIG[rp.tier].pinWindow), false, {
       impact,
       vent,
       sinceCutoff,
       divert,
+      stick,
     });
     return { frame, shot, f };
   }
@@ -1390,6 +1449,7 @@ export class Game {
     }
     const tiltDeg = tiltAngle(w.tilt) / RAD;
     const cue = w.phase === 'coast' && igniteIn !== null && igniteIn <= CUE_SECONDS ? Math.max(0, igniteIn) : null;
+    const keys = this.buttonKeys();
     const d: HudData = {
       tier: r.tier,
       phase: w.phase,
@@ -1430,7 +1490,14 @@ export class Game {
       // Pilot / FD manage the fuel: a short PROP chip for the compact phone strip.
       propChip: cadet ? null : Math.min(1, w.propellant / prop0),
       foldBoard: cadet,
+      // The held keys / stick, raw (it lights the same frame a key goes down).
+      input: !this.paused && !w.done ? this.devices.rawIntent() : null,
+      keys,
+      cueKey: null,
     };
+    // Keyboard play: while LIGHT is offered, the 3-2-1 cue names the key that lights the engines.
+    const ignite = this.settings.keys.ignite[0];
+    if (keys && d.lightVisible && ignite) d.cueKey = keyLabel(ignite);
     if (tut) {
       // Practice: show only the control this step teaches.
       d.lightVisible = tut.step === 'light';
@@ -1442,7 +1509,8 @@ export class Game {
       d.steerCue = practice;
       // The steer lesson's words live in the banner by the arrow (the card shrinks to a pill
       // on touch and docks top right on desktop, off the practice booster).
-      if (practice) d.steerText = STEER_LESSON[this.inputKind()];
+      if (practice) d.steerText = steerLesson(this.inputKind(), this.keyWords());
+      d.cueKey = null;
     }
     return d;
   }
@@ -1487,6 +1555,9 @@ export class Game {
       wrongWay: false,
       propChip: null,
       foldBoard: rp.tier === 'cadet',
+      input: null,
+      keys: null,
+      cueKey: null,
     };
   }
 
@@ -1518,6 +1589,12 @@ export class Game {
     s.tutorial = this.tutorial ? this.tutorial.step : null;
     s.muted = this.settings.muted;
     s.drawCalls = this.view?.drawCalls ?? 0;
+    s.tiltX = w ? w.tilt.x : 0;
+    s.tiltZ = w ? w.tilt.z : 0;
+    s.aimX = w && w.cfg.control === 'cadet' ? w.aim.x : 0;
+    s.aimZ = w && w.cfg.control === 'cadet' ? w.aim.z : 0;
+    s.inputX = r ? r.stick.x : 0;
+    s.inputZ = r ? r.stick.z : 0;
   }
 
   private resize(): void {
@@ -1537,7 +1614,7 @@ export class Game {
     if (h.tutorial && tier === 'cadet' && !h.debrief) {
       // The tutorial's steer step: the card and the practice (ghost) booster.
       this.startTutorial();
-      if (this.tutorial) this.tutorialView.update(this.tutorial, this.inputKind());
+      if (this.tutorial) this.tutorialView.update(this.tutorial, this.inputKind(), this.keyWords());
     } else if (h.debrief || h.at !== null) {
       // `manual`: the player's view (no autopilot), with the stick held from the divert.
       const manual = h.manual && !h.debrief;
@@ -1566,8 +1643,10 @@ export class Game {
               : { ...NEUTRAL_INPUT, stickX: h.stick };
         }
         stepWorld(w, commandFor(w, input, !manual));
-        // The "Other way" timer, as the frame loop would run it.
-        if (manual) this.updateWrongWay(w, DT, Math.hypot(input.stickX, input.stickZ));
+        r.stick.x = input.stickX;
+        r.stick.z = input.stickZ;
+        // The "Away from the ring" timer, as the frame loop would run it.
+        if (manual) this.updateWrongWay(w, DT, r.stick);
       }
       r.eventIndex = w.events.length;
       r.contactT = w.contact?.t ?? null;

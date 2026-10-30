@@ -6,7 +6,7 @@
 import type { EngineState, GoNoGoState, HealthBoard, Phase } from '../sim/types';
 import type { TierId } from '../sim/tiers';
 import { engineLayout } from '../render/scene';
-import type { InputDevices } from '../input/devices';
+import type { InputDevices, RawStick } from '../input/devices';
 import { el, setText, show, svgEl } from './dom';
 import type { Tone } from './tolerance';
 
@@ -63,8 +63,14 @@ export interface HudData {
   lightArmed: boolean;
   /** Cadet: the big "steer onto the ring" arrow. */
   steerCue: boolean;
-  /** Cadet: the stick is pushed but the aim does not move: pulse the arrow, "Other way". */
+  /** Cadet: the stick moves the aim away from the ring centre: pulse the arrow, "Away from the ring". */
   wrongWay: boolean;
+  /** The held stick and throttle keys (raw, screen axes) for the input indicator; null hides it. */
+  input: RawStick | null;
+  /** Keyboard play: the key labels for the action buttons (null on touch and gamepad). */
+  keys: { light: string; step: string; catch: string } | null;
+  /** Keyboard play, LIGHT shown: the 3-2-1 cue adds "Press <key> to LIGHT" (null: no line). */
+  cueKey: string | null;
   /** Tutorial steer step: the lesson's instruction, shown in the steer banner (null: the default). */
   steerText?: string | null;
   /** Pilot / FD: propellant 0..1 for the short PROP chip (compact phone strip); null hides it. */
@@ -154,7 +160,7 @@ export class Hud {
   private readonly catchSub = el('span', { class: 'sub' });
   private readonly ringCount2 = svgEl('circle', { cx: 50, cy: 50, r: RING_R, class: 'count' });
   private readonly ringHold = svgEl('circle', { cx: 50, cy: 50, r: RING_R - 7, class: 'hold' });
-  readonly lightBtn = el('button', { id: 'light-btn', class: 'action ui', 'data-testid': 'light-btn', text: 'LIGHT' });
+  readonly lightBtn = el('button', { id: 'light-btn', class: 'action ui', 'data-testid': 'light-btn' });
   readonly stepBtn = el('button', { id: 'step-btn', class: 'action ui', 'data-testid': 'step-btn', 'aria-label': 'Step down from 13 to 3 engines (R)' });
   // Tolerance chips (all tiers): pin offset with a steer arrow, tilt, and V/S vs the contact limit.
   private readonly pinChip = el('span', { class: 'chip tol', 'data-testid': 'hud-pin' });
@@ -166,9 +172,27 @@ export class Hud {
   private readonly vsGlyph = el('span', { class: 'g' });
   // The 3-2-1 ignition cue (every tier) and the Cadet steer arrow.
   private readonly cue = el('div', { id: 'ign-cue', 'data-testid': 'ign-cue', 'aria-hidden': 'true' });
+  private readonly cueNum = el('span', { class: 'n' });
+  private readonly cueHow = el('span', { class: 'how' });
   private readonly steer = el('div', { id: 'steer-cue', 'data-testid': 'steer-cue' });
   private readonly steerArrow = svgEl('g', {});
   private readonly steerText = el('span');
+  private readonly lightText = el('span');
+  private readonly stepKey = el('span', { class: 'key', text: 'R' });
+  private readonly stepText = el('span', { text: '13 → 3' });
+  // Input indicator (strip): a dial with a stick dot, four arrow wedges and throttle marks,
+  // lit from the raw held keys the moment they go down (before any smoothing).
+  private readonly inputInd = el('span', { class: 'cell input-ind', id: 'input-ind', 'data-testid': 'input-indicator', 'data-x': '0.00', 'data-z': '0.00' });
+  private readonly inputDot = svgEl('circle', { cx: 0, cy: 0, r: 2.6, class: 'dot' });
+  private readonly wedges: Record<'up' | 'down' | 'left' | 'right', SVGPathElement> = {
+    up: svgEl('path', { d: 'M0 -11.5 L-3.6 -6.8 L3.6 -6.8 Z', class: 'wedge' }),
+    down: svgEl('path', { d: 'M0 11.5 L-3.6 6.8 L3.6 6.8 Z', class: 'wedge' }),
+    left: svgEl('path', { d: 'M-11.5 0 L-6.8 -3.6 L-6.8 3.6 Z', class: 'wedge' }),
+    right: svgEl('path', { d: 'M11.5 0 L6.8 -3.6 L6.8 3.6 Z', class: 'wedge' }),
+  };
+  private readonly thrUp = svgEl('path', { d: 'M18 -10 L14.5 -4 L21.5 -4 Z', class: 'thr' });
+  private readonly thrDown = svgEl('path', { d: 'M18 10 L14.5 4 L21.5 4 Z', class: 'thr' });
+  private inputKey = '';
   private captionUntil = 0;
   private divertActive = false;
 
@@ -229,6 +253,14 @@ export class Hud {
     this.vsChip.append(el('span', { class: 'vs-unit', text: 'm/s' }), this.vsGlyph);
     const tol = el('span', { class: 'cell tolerances' }, [this.pinChip, this.tiltChip, this.propChip]);
 
+    // Input indicator: the dial (stick dot, arrow wedges) and the throttle up/down marks.
+    const inputSvg = svgEl('svg', { viewBox: '-13 -13 36 26', class: 'input-dial', 'aria-hidden': 'true' });
+    inputSvg.append(svgEl('circle', { cx: 0, cy: 0, r: 10, class: 'dial' }));
+    for (const w of Object.values(this.wedges)) inputSvg.append(w);
+    inputSvg.append(this.inputDot, this.thrUp, this.thrDown);
+    this.inputInd.append(el('span', { class: 'k', text: 'INPUT' }), inputSvg);
+    this.inputInd.hidden = true;
+
     const telemetry = el('div', { id: 'telemetry', 'data-testid': 'telemetry' }, [
       el('span', { class: 'brand' }, [el('b', { text: 'HB-07' }), this.mission]),
       ring,
@@ -240,6 +272,7 @@ export class Hud {
       cell('STOP', gauge, this.stopLabel),
       this.windCell,
       tol,
+      this.inputInd,
       el('span', { class: 'cell time' }, [el('span', { class: 'k', text: 'T' }), this.tPlus]),
       // Folded in: above the strip on desktop, a wrapped row inside it on phones.
       this.gonogo,
@@ -262,7 +295,9 @@ export class Hud {
     this.ringCount2.setAttribute('stroke-dasharray', `${RING_C.toFixed(1)}`);
     this.ringHold.setAttribute('stroke-dasharray', `${(2 * Math.PI * (RING_R - 7)).toFixed(1)}`);
     this.catchBtn.append(ringSvg, this.catchLabel, this.catchSub);
-    this.stepBtn.append(el('span', { class: 'key', text: 'R' }), el('span', { text: '13 → 3' }));
+    this.stepBtn.append(this.stepKey, this.stepText);
+    this.lightBtn.append(this.lightText);
+    this.cue.append(this.cueNum, this.cueHow);
 
     this.root = el('div', { id: 'hud', class: 'ui hidden', 'data-testid': 'hud' }, [
       telemetry,
@@ -342,6 +377,35 @@ export class Hud {
     };
     this.divert.addEventListener('pointerup', end);
     this.divert.addEventListener('pointercancel', end);
+
+    // A key down / up redraws the input indicator at once, not on the next frame.
+    devices.onRawChange(() => this.drawInput(devices.rawIntent()));
+  }
+
+  /** Lights the input indicator from the raw held input (screen axes). Cheap when unchanged. */
+  private drawInput(r: RawStick): void {
+    const x = Math.round(r.x * 100) / 100;
+    const z = Math.round(r.z * 100) / 100;
+    const key = `${x},${z},${r.throttle}`;
+    if (key === this.inputKey) return;
+    this.inputKey = key;
+    const ind = this.inputInd;
+    ind.dataset['x'] = x.toFixed(2);
+    ind.dataset['z'] = z.toFixed(2);
+    ind.classList.toggle('active', x !== 0 || z !== 0);
+    const lit = (e: SVGElement, on: boolean): void => {
+      e.classList.toggle('on', on);
+    };
+    lit(this.wedges.up, z < -0.2);
+    lit(this.wedges.down, z > 0.2);
+    lit(this.wedges.left, x < -0.2);
+    lit(this.wedges.right, x > 0.2);
+    lit(this.thrUp, r.throttle > 0);
+    lit(this.thrDown, r.throttle < 0);
+    const m = Math.hypot(x, z);
+    const k = m > 1 ? 6.5 / m : 6.5;
+    this.inputDot.setAttribute('cx', (x * k).toFixed(2));
+    this.inputDot.setAttribute('cy', (z * k).toFixed(2));
   }
 
   setVisible(on: boolean): void {
@@ -438,14 +502,17 @@ export class Hud {
       const ang = (Math.atan2(d.pin.sz, d.pin.sx) * 180) / Math.PI;
       this.steerArrow.setAttribute('transform', `rotate(${ang.toFixed(0)})`);
       this.steerArrow.style.opacity = on ? '0' : '1';
-      // A push that does not move the aim (it points away from the ring): say so.
+      // The arrow's screen direction, for tests (x right, z down).
+      this.steer.dataset['sx'] = d.pin.sx.toFixed(2);
+      this.steer.dataset['sz'] = d.pin.sz.toFixed(2);
+      // A push that moves the aim away from the ring centre: say so (sideways is fine).
       const wrong = d.wrongWay && !on;
       setText(
         this.steerText,
         on
           ? 'On the ring ✓'
           : wrong
-            ? `Other way ↺ · push along the arrow · ${fmt(d.pin.dist, 1)} m`
+            ? `Away from the ring ↺ · push along the arrow · ${fmt(d.pin.dist, 1)} m`
             : `${d.steerText ?? 'Steer onto the ring'} · ${fmt(d.pin.dist, 1)} m`,
       );
       const cls = on ? 'ok' : wrong ? 'wrong' : '';
@@ -464,10 +531,17 @@ export class Hud {
     if (d.cue !== null) {
       const k = Math.min(3, Math.ceil(d.cue));
       const txt = d.lightArmed ? 'ARMED ✓' : k >= 1 && k <= 3 ? `${k}…` : 'LIGHT';
-      setText(this.cue, txt);
+      setText(this.cueNum, txt);
+      // Keyboard play: say which key lights the engines, under the count.
+      const how = d.cueKey !== null && !d.lightArmed ? `Press ${d.cueKey} to LIGHT` : '';
+      setText(this.cueHow, how);
+      show(this.cueHow, how !== '');
       const cls = k >= 1 && k <= 3 && !d.lightArmed ? 'count' : 'go';
       if (this.cue.className !== cls) this.cue.className = cls;
     }
+    // Input indicator: visible in flight; the keys also light it directly (drawInput).
+    show(this.inputInd, d.input !== null);
+    if (d.input) this.drawInput(d.input);
     setText(this.lat, `${fmt(d.lat, 1)} m/s`);
     setText(this.prop, `${fmt(d.propFrac * 100)}% · ${fmt(d.propellantT, 1)} t`);
     this.propFill.style.width = `${fmt(d.propFrac * 100, 1)}%`;
@@ -545,13 +619,22 @@ export class Hud {
       this.ringHold.setAttribute('stroke-dashoffset', (hc * (1 - hold)).toFixed(1));
       setText(this.catchLabel, d.armsClosing ? 'CLOSING' : 'CATCH');
       // Short text: it must fit inside the ring on the smallest phone button.
-      setText(this.catchSub, d.armsClosing ? '✓ arms' : d.catchTgo !== null ? `${fmt(Math.max(0, d.catchTgo), 1)} s` : 'hold');
+      // Keyboard play: the CATCH key leads the line ("Space · 3.2 s").
+      const sub = d.armsClosing ? '✓ arms' : d.catchTgo !== null ? `${fmt(Math.max(0, d.catchTgo), 1)} s` : 'hold';
+      let line = sub;
+      if (d.keys && !d.armsClosing) line = d.catchTgo !== null ? `${d.keys.catch} · ${sub}` : `press ${d.keys.catch}`;
+      setText(this.catchSub, line);
       this.catchBtn.classList.toggle('closing', d.armsClosing);
       this.catchBtn.classList.toggle('urgent', !d.armsClosing && d.catchTgo !== null && d.catchTgo < 4.5);
     }
     show(this.lightBtn, d.lightVisible);
-    setText(this.lightBtn, d.lightArmed ? 'LIGHT ✓' : 'LIGHT');
+    setText(this.lightText, `${d.lightArmed ? 'LIGHT ✓' : 'LIGHT'}${d.keys ? ` · ${d.keys.light}` : ''}`);
     show(this.stepBtn, d.stepVisible);
+    // Keyboard play: the mapped key in the badge and "STEP" in words; touch keeps the short form.
+    setText(this.stepKey, d.keys ? d.keys.step : 'R');
+    setText(this.stepText, d.keys ? 'STEP 13 → 3' : '13 → 3');
+    const stepAria = `Step down from 13 to 3 engines (${d.keys ? d.keys.step : 'R'})`;
+    if (this.stepBtn.getAttribute('aria-label') !== stepAria) this.stepBtn.setAttribute('aria-label', stepAria);
     show(this.slowMo, d.slowMo);
     setText(this.cameraTag, d.camera);
     setText(this.fps, d.fps === null ? '' : `${fmt(d.fps)} fps`);

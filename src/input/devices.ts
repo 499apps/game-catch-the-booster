@@ -21,6 +21,13 @@ const GAME_KEYS = new Set(['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowR
 
 /** 'cam1'..'cam5' pick a camera directly (Numpad 1-5: the digit row sets the throttle). */
 export type UiKey = 'pause' | 'camera' | 'cameraAuto' | 'mute' | 'cam1' | 'cam2' | 'cam3' | 'cam4' | 'cam5';
+
+/** What the player holds right now, before smoothing: screen axes (x right, z down). */
+export interface RawStick {
+  x: number;
+  z: number;
+  throttle: -1 | 0 | 1;
+}
 const CAM_KEYS: Record<string, UiKey> = { Numpad1: 'cam1', Numpad2: 'cam2', Numpad3: 'cam3', Numpad4: 'cam4', Numpad5: 'cam5' };
 
 interface Haptics {
@@ -54,6 +61,7 @@ export class InputDevices {
   private padIndex: number | null = null;
   private lastRumble = 0;
   private uiListeners: ((k: UiKey) => void)[] = [];
+  private rawListeners: (() => void)[] = [];
   private prevPadButtons: boolean[] = [];
   private keymap: KeyMap = { ...STANDARD_KEYS };
   /** While true (key remapping in Settings), keys do not reach the game. */
@@ -87,6 +95,29 @@ export class InputDevices {
     for (const fn of this.uiListeners) fn(k);
   }
 
+  /** Called on every key down / up that reaches the game (the HUD input indicator lights at once). */
+  onRawChange(fn: () => void): void {
+    this.rawListeners.push(fn);
+  }
+
+  private emitRaw(): void {
+    for (const fn of this.rawListeners) fn();
+  }
+
+  /**
+   * The held stick and throttle keys now, from every device, before smoothing and without
+   * consuming taps. Screen axes (x right, z down), so it matches the keys the player holds.
+   */
+  rawIntent(): RawStick {
+    const keys = this.tapped.size ? new Set([...this.held, ...this.tapped]) : this.held;
+    const list: RawIntent[] = [mapKeyboard(keys, 0, this.keymap)];
+    const gp = this.pad();
+    if (gp) list.push(mapGamepad({ axes: gp.axes, buttons: gp.buttons.map((b) => ({ pressed: b.pressed, value: b.value })) }));
+    list.push(mapTouch(this.touch));
+    const m = mergeIntents(list);
+    return { x: m.stickX, z: m.stickZ, throttle: m.throttleRate > 0 ? 1 : m.throttleRate < 0 ? -1 : 0 };
+  }
+
   private onKeyDown = (e: KeyboardEvent): void => {
     const t = e.target as HTMLElement | null;
     if (this.capturing) return;
@@ -105,15 +136,17 @@ export class InputDevices {
     }
     this.held.add(e.code);
     this.tapped.add(e.code);
+    if (!e.repeat) this.emitRaw();
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {
-    this.held.delete(e.code);
+    if (this.held.delete(e.code)) this.emitRaw();
   };
 
   private onBlur = (): void => {
     this.held.clear();
     this.tapped.clear();
+    this.emitRaw();
   };
 
   /** Seconds the divert control has been held on any device (keyboard, pad, touch). */
@@ -140,6 +173,7 @@ export class InputDevices {
       divertHeldFor: 0,
     });
     this.shaper = new InputShaper();
+    this.emitRaw();
   }
 
   private pad(): Gamepad | null {

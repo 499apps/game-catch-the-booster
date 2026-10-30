@@ -38,6 +38,22 @@ export class InputRecorder {
   }
 }
 
+/** The input in force at `step` (random access, binary search; NEUTRAL_INPUT before the first entry). */
+export function inputAt(log: InputLog, step: number): PilotInput {
+  const e = log.entries;
+  let lo = 0;
+  let hi = e.length - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if ((e[mid]?.step ?? Infinity) <= step) {
+      found = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  return found >= 0 ? (e[found]?.input ?? NEUTRAL_INPUT) : NEUTRAL_INPUT;
+}
+
 /** Reads a log in step order. */
 export class InputPlayer {
   private i = 0;
