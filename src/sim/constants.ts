@@ -27,6 +27,12 @@ export const PIN_ABOVE_BASE = 64; // m, catch pins near the top
 export const PIN_ABOVE_COM = PIN_ABOVE_BASE - COM_ABOVE_BASE; // 39 m
 export const GIMBAL_BELOW_COM = 24; // m, lever arm of the gimbal force
 export const INERTIA_FACTOR = 1 / 18; // I = k m L^2 (mass concentrated low; slender cylinder is 1/12)
+/**
+ * Centre of percussion above the CoM: I / (m * gimbal lever) = k L^2 / lever (~11.7 m).
+ * A gimbal side force does not move this point, so lateral guidance on it has no
+ * non-minimum-phase zero (the "tail kick" still happens to the CoM and the pins).
+ */
+export const COP_ABOVE_COM = (INERTIA_FACTOR * BOOSTER_LENGTH * BOOSTER_LENGTH) / GIMBAL_BELOW_COM;
 export const FIN_ALPHA_PER_PA = 6.7e-6; // rad/s^2 per Pa of dynamic pressure at full fin deflection
 export const FIN_Q_MIN = 5000; // Pa: grid fins are only effective above this
 export const FIN_Q_FULL = 8000; // Pa: full fin authority from here
@@ -37,7 +43,8 @@ export const RHO0 = 1.225; // kg/m^3
 export const SCALE_HEIGHT = 8500; // m
 export const SOUND_SPEED = 343; // m/s (game value, also used for audio delay)
 export const CDA_AXIAL = 128; // m^2 -> ballistic coefficient ~2500 kg/m^2 at 320 t
-export const CDA_SIDE = 500; // m^2, broadside (71 m x 9 m x Cd ~0.8)
+export const CDA_SIDE = 500; // m^2, broadside crossflow drag (71 m x 9 m x Cd ~0.8), scales with sin^2(AoA)
+export const CNA_BASE = 127; // m^2 per rad, slender-body normal-force slope (2 x base area 63.6 m^2)
 
 // ---- The Catcher (tower) ----
 export const TOWER_HEIGHT = 146;

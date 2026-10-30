@@ -247,3 +247,69 @@ Gamepad rumble scales with thrust. Controls are remappable. A one-handed preset 
 - Open-source 6-DOF catch sim: https://github.com/DionisMuzenitov/starship-catch-sim
 - ISS docking sim: https://iss-sim.spacex.com/
 - KSP as an educational game: https://link.springer.com/chapter/10.1007/978-3-030-22602-2_24
+
+## Implementation notes (C1a, 2026-10-29)
+
+### Frame and geometry
+- World frame: x points offshore, y points up, z runs along the coast. The arm centreline (catch point) is at x = 0, z = 0.
+- The CoM is 25 m above the engine plane. The pins are 64 m above it, so they are 39 m above the CoM.
+- The rail tops are at 100 m, so the CoM is at 61 m when the pins touch the rails.
+- Attitude is a tilt vector (the horizontal part of the body axis) plus a decoupled roll. The model is 6-DOF with an axisymmetric body.
+
+### Reference timeline (src/sim/reference.ts)
+The autopilot tracks a time-locked reference with feed-forward plus PD. Thus the event times come from the plan, not from luck.
+
+| Segment | Time after ignition | Shape |
+|---|---|---|
+| A | 0 to 4 s, 13 engines | Upward acceleration ramps over 1 s (spool), then holds, to reach -45 m/s at 4 s |
+| B | 4 to 31.5 s, 3 engines | Descent speed v(s) = 1 + 1.0 s + c s², where s is the time to contact |
+| Lateral A | 0 to 4 s | Braking: acceleration ramps in (0-1 s), holds, ramps out (2.5-4 s) to -6 m/s |
+| Lateral B | 4 to 13 s | Cubic Hermite to the hold point, 40 m offshore of the arms |
+| Divert | 13 to 23 s, after GO | Minimum-jerk move from 40 m to 0 m |
+
+Derivation of segment B:
+- Boundary conditions: v(27.5) = 45 m/s, so c = (45 - 1 - 1.0 × 27.5) / 27.5² = 0.0218.
+- Distance: ∫ v ds = 27.5 + 0.5 × 27.5² + (c/3) × 27.5³ ≈ 556 m. So the CoM is at about 617 m at step-down.
+- Deceleration is 1.0 + 2cs: 2.2 m/s² at step-down and 1.0 m/s² at contact.
+- The end value of 1.0 m/s² keeps the throttle above minimum. At 260 t, 3 engines at 40% give only 0.62 m/s² of upward acceleration. Thus the booster never has to climb.
+- The last 7 s cover about 34 m, from 9 m/s to 1 m/s. This is close to the footage ("last 20 m in ~7 s").
+
+Derivation of segment A and the ignition height:
+- With a 1 s ramp, the speed change is a_A × 3.5 s. Thus a_A = (v0 - 45) / 3.5, which is about 70 m/s² for v0 = 292 m/s.
+- The distance is 4 v0 - a_A × 6.17 ≈ 733 m. Thus the ideal ignition CoM height is 61 + 556 + 733 ≈ 1.35 km.
+- The thrust is about 21 MN, which is 13 engines at about 70%. With 11 engines, the throttle is about 85%, so engine-outs keep a margin.
+
+Lateral plan:
+- The run starts about 0.4 km offshore at -115 m/s horizontal and -300 m/s vertical. The booster flies engines-first, about 21° from vertical.
+- The 13-engine burn is close to retrograde. It removes the horizontal speed down to -6 m/s at about 57 m offshore by step-down.
+- The lateral braking ramps out from 2.2 s to 3.5 s. From 3.5 s to 4.0 s the lean limit is 3°, so the booster is upright and not rotating at step-down.
+- On 3 engines the attitude authority is about 5 times lower (0.26 rad/s² at full gimbal). A turn rate left over from the 13-engine burn needs more than 1 s to stop.
+- The design brief asks for 0.6-0.8 km. We start at about 0.4 km, because a longer move needs more lean than the burn can give.
+- The hold point is 30 m offshore of the arms. The divert peak acceleration is 5.77 × 30 / 10² ≈ 1.7 m/s². This gives a lean of about 10°: toward the tower first, then away (counter-burn), then vertical.
+- On 3 engines the attitude has priority over the position. The lean command is limited to 12° and slews at no more than 0.2 rad/s. The attitude loop caps its closing rate at √(1.2 α_max e), so it never builds a rate it cannot stop.
+
+Aerodynamic normal force:
+- The side force uses a slender-body slope (2 × base area = 127 m²/rad) plus crossflow drag (500 m²) times sin²(AoA).
+- An earlier linear 500 m² term made the side force cancel about 75% of the lean's effect during the burn. This caused the lateral overshoot in tuning pass 1.
+
+Lateral control on 3 engines:
+- The gimbal side force is T × δ at the tail. Its lateral acceleration is about 11.7 m × α, which is as large as the lean itself. This puts a right-half-plane zero near 1 rad/s in the lateral loop.
+- The autopilot steers the centre of percussion, I / (m × 24 m) ≈ 11.7 m above the CoM. The gimbal side force does not move this point, so its acceleration is (T/m) × lean.
+- The tail kick is still visible on the CoM and the pins.
+- The attitude loop uses a filtered rate feed-forward of the tilt target to remove most of the PD lag.
+
+Propellant budget:
+- Segment A uses about 23 t and segment B about 27 t. A 68 t load leaves about 18 t at the catch, inside the 5-35 t target.
+- The mass is about 290 t at step-down (T/W minimum 0.95, hover possible) and about 268 t at the catch (T/W minimum 1.03). This is "you cannot hover forever".
+
+### Catch logic
+- The CATCH prompt shows when the predicted time to contact is at most the close time + 1.5 s. The prediction is 2h / (v + 1).
+- The autopilot presses at close time + 0.7 s. Thus the arms start at about +25.5 s and close at about +30.5 s, with the pins about 1.5 m above the rails. Contact is at +31.5 s.
+- The arm close start is about 1.5 s earlier than the footage estimate (+27 s), because the cutoff must stay inside the 30 ± 3 s window.
+- Failures always end as a soft splashdown with one tip. The reasons are: noGo, lateIgnition, flameout, late, early, missLateral, unstable, overload, noCatch, climb, tilt, timeout.
+- The rails are a spring-damper: k = 9 MN/m and c = 1.9 MN·s/m (damping ratio about 0.6). Static compression is 0.3 m, and a 4 m/s contact stays under 1 m of the 1.5 m stroke.
+
+### Go/No-Go
+- The poll runs at +8 s. Checks: engines, propellant, track, tower sensors, arms, comms.
+- Cadet and Pilot decide automatically. The Flight Director must call GO or NO-GO by +12.5 s. With no call, the booster stays safe and diverts offshore.
+- A Flight Director No-Go with a red board earns "Good Call" (+200).
