@@ -10,6 +10,7 @@ import {
   TOWER_HEIGHT,
   TOWER_X,
 } from '../sim/constants';
+import { T_DIVERT } from '../sim/reference';
 import type { Phase } from '../sim/types';
 import type { Vec3 } from '../sim/vec';
 import { WATERLINE_X, terrainHeight } from './terrain';
@@ -45,14 +46,15 @@ export const TOWER_TOP_LAYER = 1;
 export const HERO_CAM: Vec3 = { x: TOWER_X - 74, y: terrainHeight(TOWER_X - 74, 200) + 2.4, z: 200 };
 
 /**
- * Fraction of the frame height that the HUD covers at the top: the telemetry strip on
- * desktop (~20%) and the strip with the folded board on phones (~28%), plus a margin.
+ * The bands of the frame (fractions of its height) the HUD covers, kept clear of the subject.
+ *  Portrait phones: the telemetry strip (and folded board) is at the TOP (~28%); the bottom
+ *  keeps a small margin for the camera tag and the thumbs.
+ *  Landscape / desktop: the strip is at the BOTTOM (~20%, see #telemetry in styles.css); the
+ *  top keeps a margin for the menu button and the camera tag.
  */
-export function safeTop(aspect: number): number {
-  return aspect < 1 ? 0.3 : 0.22;
+export function safeBand(aspect: number): { top: number; bottom: number } {
+  return aspect < 1 ? { top: 0.3, bottom: 0.07 } : { top: 0.09, bottom: 0.22 };
 }
-/** Bottom margin (camera tag, thumbs) kept clear of the subject. */
-export const SAFE_BOTTOM = 0.07;
 
 export interface ShotInput {
   com: Vec3;
@@ -205,7 +207,11 @@ export class CameraRig {
         // to sea over the arms instead: arms and plume below, the hull rising through the
         // frame, the horizon near the top. The aim follows the booster only a little.
         wantPos.set(TOWER_CAM.x, TOWER_CAM.y, TOWER_CAM.z);
-        fov = THREE.MathUtils.clamp(2 * Math.atan(Math.tan((112 / 2) * (Math.PI / 180)) / c.aspect) * DEG, 74, 104);
+        const landscape = c.aspect >= 1;
+        // Landscape: a wider lens (120 deg across), so the arms and the ring can sit well above
+        // the bottom HUD strip while the horizon stays in frame.
+        const hfov = landscape ? 120 : 112;
+        fov = THREE.MathUtils.clamp(2 * Math.atan(Math.tan((hfov / 2) * (Math.PI / 180)) / c.aspect) * DEG, 74, 104);
         const look = new THREE.Vector3(55, RAIL_Y - 5, 10);
         const mid = com.clone().addScaledVector(axis, (BOOSTER_LENGTH / 2 - COM_ABOVE_BASE) * 0.5);
         const near = 1 - THREE.MathUtils.clamp((com.distanceTo(look) - 60) / 400, 0, 1);
@@ -215,9 +221,25 @@ export class CameraRig {
         // Pitch between "horizon just inside the top edge" and a shallow 12 deg down.
         const d = wantTarget.clone().sub(wantPos);
         const horiz = Math.max(1, Math.hypot(d.x, d.z));
-        const maxDown = ((fov / 2 - 10) * Math.PI) / 180;
         const minDown = (12 * Math.PI) / 180;
-        const pitch = THREE.MathUtils.clamp(Math.atan2(d.y, horiz), -maxDown, -minDown);
+        let pitch: number;
+        if (landscape) {
+          // Low booster (CoM < 170 m): the HUD strip covers the bottom, so pitch as far down as
+          // the horizon allows (3 deg inside the top edge), which lifts the arms, the ring and
+          // the pins to ~1/3 up the frame, clear of the strip.
+          const low = -((fov / 2 - 3) * Math.PI) / 180;
+          // High booster (CoM > 230 m, e.g. picked mid-divert): look up at it, so it sits in
+          // the upper-middle of the frame (a third of the half-height above the centre).
+          const toCom = com.clone().sub(wantPos);
+          const elev = Math.atan2(toCom.y, Math.max(1, Math.hypot(toCom.x, toCom.z)));
+          const high = THREE.MathUtils.clamp(elev - ((fov / 2) * Math.PI) / 180 / 3, -1.3, 1.3);
+          // Blend between them as the booster comes down.
+          const k = THREE.MathUtils.smoothstep(230 - com.y, 0, 60);
+          pitch = high + (low - high) * k;
+        } else {
+          const maxDown = ((fov / 2 - 10) * Math.PI) / 180;
+          pitch = THREE.MathUtils.clamp(Math.atan2(d.y, horiz), -maxDown, -minDown);
+        }
         wantTarget.y = wantPos.y + Math.tan(pitch) * horiz;
         targetTau = 0.25;
         shakeK = 1;
@@ -231,7 +253,8 @@ export class CameraRig {
         }
         // Long lens: the subject sits in the band below the HUD strip.
         // Portrait phones are narrow: allow a wider lens so tower and booster both fit.
-        const f = frameInSafe(wantPos, pts, c.aspect, safeTop(c.aspect), SAFE_BOTTOM, 1.2, 0.8, c.aspect < 1 ? 48 : 30);
+        const band = safeBand(c.aspect);
+        const f = frameInSafe(wantPos, pts, c.aspect, band.top, band.bottom, 1.2, 0.8, c.aspect < 1 ? 48 : 30);
         wantTarget.copy(f.target);
         fov = f.fov * (1 + 0.12 * this.pull);
         targetTau = 0.45;
@@ -246,7 +269,8 @@ export class CameraRig {
         wantPos.set(com.x + Math.cos(a) * R, com.y + 14, com.z - Math.sin(a) * R);
         wantPos.y = Math.max(wantPos.y, terrainHeight(wantPos.x, wantPos.z) + 12);
         // Fixed 44 deg drone lens, re-aimed so the hull and engine end clear the HUD.
-        const f = frameInSafe(wantPos, [top, base], c.aspect, safeTop(c.aspect), SAFE_BOTTOM, 1, 44, 44);
+        const band = safeBand(c.aspect);
+        const f = frameInSafe(wantPos, [top, base], c.aspect, band.top, band.bottom, 1, 44, 44);
         wantTarget.copy(f.target);
         fov = 44;
         posTau = 0.9;
@@ -288,7 +312,9 @@ export class CameraRig {
         const pts = [top, plumeEnd, new THREE.Vector3(TOWER_X, TOWER_HEIGHT + 8, 0), new THREE.Vector3(TOWER_X, 0, 0)];
         // Keep the whole story (booster, plume, tower) below the HUD, with some foreground
         // (dunes, crowd) at the bottom of the frame.
-        const f = frameInSafe(wantPos, pts, c.aspect, safeTop(c.aspect), SAFE_BOTTOM + 0.06, 1.12, 2.5, c.aspect < 1 ? 64 : 38);
+        const band = safeBand(c.aspect);
+        // A little foreground (dunes, crowd) under the subject.
+        const f = frameInSafe(wantPos, pts, c.aspect, band.top, band.bottom + 0.06, 1.12, 2.5, c.aspect < 1 ? 64 : 38);
         wantTarget.copy(f.target);
         fov = f.fov;
         targetTau = 0.6;
@@ -376,7 +402,9 @@ export class AutoDirector {
     if (armsClosing || tau >= 20) return 'towerTop';
     if (tau < 4) return 'beach'; // ignition on 13
     if (tau < 10) return 'chase'; // step-down to 3, shock diamonds
-    if (tau < 15) return 'wide'; // the divert swing toward the tower
+    if (tau < T_DIVERT) return 'wide'; // the hold beside the tower, the whole scene
+    // The divert: the beach long lens, where the booster and the ring read well while the
+    // player steers (the wide lens shows the booster ~90 px tall and the ring not at all).
     return 'beach';
   }
 
@@ -388,7 +416,10 @@ export class AutoDirector {
     const want = this.desired(phase, tau, armsClosing, tDone, t);
     const urgent = phase === 'splashdown' || phase === 'caught' || armsClosing;
     const [h0, h1] = AutoDirector.STEER_HOLD;
-    const hold = steering && tau !== null && tau >= h0 && tau < h1;
+    // Hold only a steering lens: the cut from the wide shot to the divert lens at T_DIVERT
+    // still happens, and then that lens holds.
+    const steerLens = this.current === 'beach' || this.current === 'towerTop';
+    const hold = steering && steerLens && tau !== null && tau >= h0 && tau < h1;
     if (want !== this.current && (urgent || (!hold && t - this.since >= AutoDirector.MIN_HOLD))) {
       this.current = want;
       this.since = t;

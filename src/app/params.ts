@@ -23,6 +23,13 @@ export interface Hooks {
   scale: number;
   /** Force the Cadet first-run tutorial (other hooks skip it so tests start at once). */
   tutorial: boolean;
+  /**
+   * Still mode: fly the frame by hand instead of the autopilot (the player's HUD: the 3-2-1
+   * cue, the steer arrow). A negative `at` freezes that many seconds BEFORE the ideal ignition.
+   */
+  manual: boolean;
+  /** Still mode with `manual`: the stick (world x, -1..1) held from the divert start. */
+  stick: number;
 }
 
 const QUALITY_IDS: readonly string[] = ['auto', 'low', 'medium', 'high'];
@@ -37,7 +44,7 @@ function num(v: string | null): number | null {
 
 export function parseHooks(search: string): Hooks {
   const p = new URLSearchParams(search);
-  const keys = ['autopilot', 'timescale', 'still', 'seed', 'tier', 'at', 'debrief', 'fps', 'test', 'quality', 'scale', 'tutorial'];
+  const keys = ['autopilot', 'timescale', 'still', 'seed', 'tier', 'at', 'debrief', 'fps', 'test', 'quality', 'scale', 'tutorial', 'manual', 'stick'];
   const q = p.get('quality');
   const active = keys.some((k) => p.has(k));
   const tierRaw = p.get('tier');
@@ -55,5 +62,7 @@ export function parseHooks(search: string): Hooks {
     quality: q && QUALITY_IDS.includes(q) ? (q as QualitySetting) : null,
     scale: Math.min(Math.max(num(p.get('scale')) ?? 1, 0.25), 1),
     tutorial: p.get('tutorial') === '1',
+    manual: p.get('manual') === '1',
+    stick: Math.min(Math.max(num(p.get('stick')) ?? 0, -1), 1),
   };
 }

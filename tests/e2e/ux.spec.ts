@@ -21,6 +21,30 @@ test('HUD: the Go/No-Go board never covers ALTITUDE, PROP or STOP (all layouts)'
   }
 });
 
+test('phone strip: no chip, value or cell clips its own text during the flight', async ({ page }, info) => {
+  test.skip(info.project.name !== 'iphone-15' && info.project.name !== 'pixel-7', 'The compact strip is for phones.');
+  for (const [tier, at] of [
+    ['pilot', 5],
+    ['cadet', 14],
+    ['fd', 10],
+  ] as const) {
+    // Deterministic frames in the burn (PIN, TILT, V/S, STOP and the board all showing).
+    await openGame(page, `still=1&tier=${tier}&seed=2&at=${at}`);
+    await expect(page.getByTestId('telemetry')).toBeVisible();
+    const clipped = await page.evaluate(() =>
+      Array.from(document.querySelectorAll<HTMLElement>('#telemetry, #telemetry .chip, #telemetry .v, #telemetry .cell'))
+        .filter((e) => e.offsetParent !== null && e.clientWidth > 0)
+        .filter((e) => e.scrollWidth > e.clientWidth + 1)
+        .map((e) => `${e.className}: "${e.textContent ?? ''}" ${e.scrollWidth}>${e.clientWidth}`),
+    );
+    expect(clipped, `${tier} +${at} s`).toEqual([]);
+    // And the strip itself stays on the screen.
+    const box = await page.getByTestId('telemetry').boundingBox();
+    const vp = page.viewportSize();
+    if (box && vp) expect(box.x + box.width).toBeLessThanOrEqual(vp.width + 1);
+  }
+});
+
 test('M toggles the sound, and the Real facts card is in the left menu', async ({ page }) => {
   await openGame(page);
   const before = (await state(page)).muted;

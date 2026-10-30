@@ -51,7 +51,8 @@ import { windAt } from '../sim/wind';
 import { createWorld, scoreWorld, slowMoActive, stepWorld, tauOf } from '../sim/world';
 import { clearMyData } from '../sw-register';
 import { el } from '../ui/dom';
-import { Hud, toneFor, type HudData, type Tone } from '../ui/hud';
+import { Hud, type HudData } from '../ui/hud';
+import { cadetPinTone, pinTone, tiltTone, type Tone } from '../ui/tolerance';
 import { Menu, type DebriefData } from '../ui/menu';
 import { ReplayBar } from '../ui/replaybar';
 import { TouchControls, isTouchDevice } from '../ui/touch';
@@ -882,7 +883,12 @@ export class Game {
     const w = r.world;
     const score = r.score ?? scoreWorld(w);
     const caught = !!w.outcome?.caught;
-    const newBest = caught && !this.hooks.still ? saveBest(r.tier, score.total, score.medal) : false;
+    // The best before this run, then this run's result, so the debrief never shows a stale best.
+    const before = loadBest(r.tier);
+    const beats = caught && score.total > before;
+    const saved = caught && !this.hooks.still ? saveBest(r.tier, score.total, score.medal) : false;
+    const newBest = saved || beats;
+    const best = beats ? score.total : before;
     const goodCall = !!w.outcome?.goodCall;
     // Deterministic replay: re-fly seed + tier + input log. The graphs come from it too.
     let tl: Timeline | null = null;
@@ -896,9 +902,9 @@ export class Game {
       tier: r.tier,
       caught,
       title: caught ? 'Caught by the arms!' : goodCall ? 'Good Call: safe splashdown' : 'Soft splashdown',
-      tip: tipFor(w.outcome?.reason ?? null, score.medal),
+      tip: tipFor(w.outcome?.reason ?? null, score.medal, r.tier),
       score,
-      best: loadBest(r.tier),
+      best,
       newBest,
       isReplay: false,
       goodCall,
@@ -1072,7 +1078,7 @@ export class Game {
     splash: FrameState['splash'],
     aids: FrameState['aids'],
     hero: boolean,
-    after: { impact: number | null; vent: number },
+    after: { impact: number | null; vent: number; sinceCutoff?: number | null },
   ): { frame: FrameState; shot: ShotInput } {
     const thrustFrac = src.thrust / (ENGINE_COUNT * ENGINE_THRUST);
     const reduced = this.reducedMotion;
@@ -1090,6 +1096,7 @@ export class Game {
       splash,
       reducedMotion: reduced,
       vent: after.vent,
+      sinceCutoff: after.sinceCutoff ?? null,
       hero,
     };
     const shot: ShotInput = {
@@ -1124,8 +1131,10 @@ export class Game {
       const pin = pinPosition(w.pos, w.tilt);
       // The target ring (every tier): the hull fits inside it when the pins are in the window.
       const ringRadius = BOOSTER_DIAMETER / 2 + w.cfg.pinWindow;
-      const up = uprightPinOffset(w.pos);
-      const tone = toneFor(Math.hypot(up.x, up.z), w.cfg.pinWindow);
+      // Ring tone: Cadet from the aim error; the others from the upright pins. Teal (ok) while
+      // nominal and higher than the final approach (the ring is a target, not an alarm).
+      const up = w.cfg.id === 'cadet' ? w.aim : uprightPinOffset(w.pos);
+      const tone = pinTone(Math.hypot(up.x, up.z), pin.y - RAIL_Y, w.cfg.pinWindow) ?? 'ok';
       // The target ring flashes when CATCH is pressed.
       const pressed = r ? r.catchReal : null;
       const flash = pressed !== null ? Math.max(0, 1 - (this.realTime - pressed) / 0.7) : 0;
@@ -1142,7 +1151,12 @@ export class Game {
     // Held in the arms: cold vapour vents gently from the booster (menu hero, catch, debrief).
     const vent = w.phase === 'caught' || w.phase === 'settling' ? 1 : 0;
     const impact = active && r && r.contactReal !== null && !this.hooks.still ? this.realTime - r.contactReal : null;
-    return this.makeFrame(srcFromWorld(w), t, pos, splash, aids, hero, { impact, vent });
+    // Seconds since the cutoff at the catch: sim time while settling, then play time once done.
+    let sinceCutoff: number | null = null;
+    if (active && r && r.contactT !== null && w.contact) {
+      sinceCutoff = w.t - r.contactT + (r.doneAtReal !== null && !this.hooks.still ? this.realTime - r.doneAtReal : 0);
+    }
+    return this.makeFrame(srcFromWorld(w), t, pos, splash, aids, hero, { impact, vent, sinceCutoff });
   }
 
   /** The frame for the replay player at its clock time. */
@@ -1160,7 +1174,8 @@ export class Game {
     const contact = tl.contactT;
     const impact = contact !== null && rp.clock.t >= contact ? rp.clock.t - contact : null;
     const vent = f.phase === 'caught' || f.phase === 'settling' ? 1 : 0;
-    const { frame, shot } = this.makeFrame(src, rp.clock.t, pos, splash, this.noAids(TIER_CONFIG[rp.tier].pinWindow), false, { impact, vent });
+    const sinceCutoff = contact !== null && rp.clock.t >= contact ? rp.clock.t - contact : null;
+    const { frame, shot } = this.makeFrame(src, rp.clock.t, pos, splash, this.noAids(TIER_CONFIG[rp.tier].pinWindow), false, { impact, vent, sinceCutoff });
     return { frame, shot, f };
   }
 
@@ -1280,12 +1295,15 @@ export class Game {
     // Pins vs the arm centreline, and the way to steer in screen axes.
     let pin: HudData['pin'] = null;
     if (flying && (!cadet || w.flags.divert)) {
-      // Upright pin offset: the lean's swing of the raw pins would invite over-steering.
-      const p = uprightPinOffset(w.pos);
+      // Cadet: the aim error (where the divert will put the pins), which is what the stick
+      // moves, so the number and the arrow answer the stick at once. Pilot / FD: the upright
+      // pin offset (the lean's swing of the raw pins would invite over-steering).
+      const p = cadet ? w.aim : uprightPinOffset(w.pos);
       const dist = Math.hypot(p.x, p.z);
       const [sx, sz] = worldToScreen(-p.x, -p.z, this.stickYaw);
       const l = Math.hypot(sx, sz) || 1;
-      pin = { dist, sx: sx / l, sz: sz / l, tone: toneFor(dist, cfg.pinWindow) };
+      const tone = cadet ? cadetPinTone(dist, w.flags.hover, cfg.pinWindow) : pinTone(dist, hp, cfg.pinWindow);
+      pin = { dist, sx: sx / l, sz: sz / l, tone };
     }
     const tiltDeg = tiltAngle(w.tilt) / RAD;
     const cue = w.phase === 'coast' && igniteIn !== null && igniteIn <= CUE_SECONDS ? Math.max(0, igniteIn) : null;
@@ -1319,12 +1337,12 @@ export class Game {
       fps: this.hooks.fps && !this.hooks.still ? this.fps : null,
       paused: this.paused,
       pin,
-      tilt: flying ? { deg: tiltDeg, tone: toneFor(tiltDeg, cfg.tiltLimitDeg) } : null,
+      tilt: flying ? { deg: tiltDeg, tone: tiltTone(tiltDeg, hp, cfg.tiltLimitDeg, w.phase === 'burn3') } : null,
       vsTone: flying ? vsToneFor(down, hp) : null,
       cue,
       lightArmed: cadet && r.lightArmed && w.phase === 'coast',
-      // From the divert until the pins are well inside the ring (and while the practice runs).
-      steerCue: cadet && !r.autopilot && pin !== null && (practice || pin.tone !== 'ok' || !w.flags.hover),
+      // From the divert until contact (it reads "On the ring" once the aim is centred).
+      steerCue: cadet && !r.autopilot && pin !== null,
       foldBoard: cadet,
     };
     if (tut) {
@@ -1424,8 +1442,14 @@ export class Game {
     const h = this.hooks;
     const tier = h.tier ?? 'cadet';
     const seed = h.seed ?? 1;
-    if (h.debrief || h.at !== null) {
-      this.startRun(tier, { seed, autopilot: true });
+    if (h.tutorial && tier === 'cadet' && !h.debrief) {
+      // The tutorial's steer step: the card and the practice (ghost) booster.
+      this.startTutorial();
+      if (this.tutorial) this.tutorialView.update(this.tutorial, this.inputKind());
+    } else if (h.debrief || h.at !== null) {
+      // `manual`: the player's view (no autopilot), with the stick held from the divert.
+      const manual = h.manual && !h.debrief;
+      this.startRun(tier, { seed, autopilot: !manual });
       const r = this.run;
       if (!r) return;
       const w = r.world;
@@ -1433,7 +1457,13 @@ export class Game {
       while (!w.done && w.step < 120 / DT) {
         const tau = tauOf(w);
         if (!h.debrief && tau !== null && tau >= limit) break;
-        stepWorld(w, commandFor(w, NEUTRAL_INPUT, true));
+        // A negative `at`: that many seconds before the ideal ignition (the 3-2-1 cue).
+        if (!h.debrief && limit < 0 && w.phase === 'coast') {
+          const down = Math.max(-w.vel.y, 1);
+          if ((w.pos.y - idealIgnitionHeight(down)) / down <= -limit) break;
+        }
+        const input = manual && w.flags.divert ? { ...NEUTRAL_INPUT, stickX: h.stick } : NEUTRAL_INPUT;
+        stepWorld(w, commandFor(w, input, !manual));
       }
       r.eventIndex = w.events.length;
       r.contactT = w.contact?.t ?? null;

@@ -202,16 +202,21 @@ function handleCommands(w: World, cmd: FlightCommand): void {
 }
 
 /**
- * Cadet: the stick moves the divert aim point at up to CADET_AIM_RATE, never more than
- * pinWindow - CADET_AIM_MARGIN from the centre, and it freezes in the last metres. The
- * autopilot always flies the booster, so no stick input can make a Cadet slide or miss.
+ * Cadet: the stick moves the divert aim point at up to CADET_AIM_RATE, only toward the ring
+ * centre, never more than pinWindow - CADET_AIM_MARGIN from it, and it freezes in the last
+ * metres. The autopilot always flies the booster, so no stick input can make a Cadet slide,
+ * miss or score worse than hands-off.
  */
 function updateCadetAim(w: World, cmd: FlightCommand, dt: number): void {
   const r = cmd.aimRate;
   if (!r || w.cfg.control !== 'cadet' || !w.flags.divert) return;
   if (pinHeightAboveRails(w.pos, w.tilt) <= CADET_AIM_FREEZE) return;
   const v = clampLen2(r, CADET_AIM_RATE);
-  w.aim = clampLen2({ x: w.aim.x + v.x * dt, z: w.aim.z + v.z * dt }, cadetAimLimit(w.cfg.pinWindow));
+  const next = clampLen2({ x: w.aim.x + v.x * dt, z: w.aim.z + v.z * dt }, cadetAimLimit(w.cfg.pinWindow));
+  // The stick can only bring the aim closer to the ring centre. A held stick (even one held
+  // the same way after the aim has crossed the centre) stops at its closest point, so no
+  // input can score worse than hands-off.
+  if (Math.hypot(next.x, next.z) <= Math.hypot(w.aim.x, w.aim.z)) w.aim = next;
 }
 
 function boardData(b: HealthBoard): Record<string, boolean> {

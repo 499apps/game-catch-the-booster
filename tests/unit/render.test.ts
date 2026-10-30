@@ -4,19 +4,19 @@ import {
   AutoDirector,
   CAMERA_IDS,
   CameraRig,
-  SAFE_BOTTOM,
   TOWER_CAM,
   TOWER_TOP_LAYER,
   WIDE_CAM,
   fovToFit,
   frameInSafe,
-  safeTop,
+  safeBand,
   stickYawFrom,
   stickYawOf,
   type CameraId,
   type ShotInput,
 } from '../../src/render/cameras';
 import { rotateStick } from '../../src/input/mapping';
+import { FINAL_APPROACH_HEIGHT, TILT_ABORT_DEG, cadetPinTone, pinTone, tiltTone } from '../../src/ui/tolerance';
 import { WATERLINE_X, terrainHeight } from '../../src/render/terrain';
 import { autopilotCommand } from '../../src/sim/autopilot';
 import { BOOSTER_LENGTH, COM_ABOVE_BASE, PIN_ABOVE_COM, RAIL_Y, TOWER_HEIGHT, TOWER_X } from '../../src/sim/constants';
@@ -34,8 +34,41 @@ describe('debrief tips depend on the result', () => {
     expect(tipFor(null, 'gold')).toMatch(/0\.3 m/);
     for (const m of ['gold', 'silver', 'bronze', 'none'] as const) expect(tipFor(null, m)).toBe(CATCH_TIPS[m]);
   });
+  it('a Bullseye points to the next tier: Cadet -> Pilot -> Flight Director', () => {
+    expect(tipFor(null, 'bullseye', 'cadet')).toMatch(/Pilot/);
+    expect(tipFor(null, 'bullseye', 'cadet')).not.toMatch(/Flight Director/);
+    expect(tipFor(null, 'bullseye', 'pilot')).toMatch(/Flight Director/);
+    expect(tipFor(null, 'bullseye', 'fd')).toMatch(/wind/i);
+  });
   it('failures keep their own tip whatever the medal', () => {
     expect(tipFor('overload', 'none')).toBe(TIPS.overload);
+  });
+});
+
+describe('HUD tolerance tones: nothing red while the flight goes to plan', () => {
+  it('TILT is neutral above the final approach unless it nears the 30 deg abort; contact limit below 30 m', () => {
+    expect(tiltTone(29.7, 1200, 3, false)).toBeNull(); // 13-engine braking lean: by design
+    expect(tiltTone(29.7, 400, 3)).toBe('warn'); // 3 engines, near the 30 deg abort
+    expect(tiltTone(31, 400, 3)).toBe('bad'); // past it
+    expect(tiltTone(14.6, 500, 3)).toBeNull(); // the step-down lean: neutral
+    expect(tiltTone(4.7, 200, 3)).toBeNull(); // the divert lean: neutral
+    expect(tiltTone(16, 200, 3)).toBe('warn'); // past half the abort
+    expect(tiltTone(1, 20, 3)).toBe('ok'); // final approach: graded
+    expect(tiltTone(2, 20, 3)).toBe('warn');
+    expect(tiltTone(3, 20, 3)).toBe('bad');
+  });
+  it('PIN is neutral above the final approach (a 31 m divert offset is not an error)', () => {
+    expect(pinTone(31, 200, 2.5)).toBeNull();
+    expect(pinTone(0.5, 20, 2.5)).toBe('ok');
+    expect(pinTone(2, 20, 2.5)).toBe('warn');
+    expect(pinTone(3, 20, 2.5)).toBe('bad');
+  });
+  it('Cadet PIN (the aim error) stays neutral until the hover', () => {
+    expect(cadetPinTone(2.2, false, 3)).toBeNull();
+    expect(cadetPinTone(0.4, true, 3)).toBe('ok');
+    expect(cadetPinTone(2.2, true, 3)).toBe('warn');
+    expect(FINAL_APPROACH_HEIGHT).toBe(30);
+    expect(TILT_ABORT_DEG).toBe(30);
   });
 });
 
@@ -47,6 +80,9 @@ describe('auto-director', () => {
     expect(d.desired('burn13', 1, false, null, 1)).toBe('beach');
     expect(d.desired('burn3', 6, false, null, 6)).toBe('chase');
     expect(d.desired('burn3', 12, false, null, 12)).toBe('wide');
+    // The divert (from T_DIVERT = 13 s): the beach long lens, not the far wide shot.
+    expect(d.desired('burn3', 13.5, false, null, 13.5)).toBe('beach');
+    expect(d.desired('burn3', 16, false, null, 16)).toBe('beach');
     expect(d.desired('splashdown', 25, false, 25, 26)).toBe('wide');
   });
   it('shows the booster held in the arms on the beach long lens after the catch (and in the debrief)', () => {
@@ -129,15 +165,20 @@ describe('auto-director holds the shot while the player steers', () => {
     }
     return shots;
   };
-  it('no cut between 13 s and 23 s when steering; the usual cuts otherwise', () => {
+  it('cuts from the wide shot to the beach lens at the divert, then holds it while steering (no cut to 23 s)', () => {
     const steer = fly(true);
-    const at = steer.get(130);
-    expect(at).toBeDefined();
-    for (let k = 130; k < 230; k++) expect(steer.get(k), `tau ${k / 10}`).toBe(at);
+    expect(steer.get(120)).toBe('wide');
+    // The cut at T_DIVERT (13 s) still happens (within a step of float rounding).
+    for (let k = 132; k < 230; k++) expect(steer.get(k), `tau ${k / 10}`).toBe('beach');
     expect(steer.get(240)).toBe('towerTop');
     const free = fly(false);
+    expect(free.get(120)).toBe('wide');
     expect(free.get(170)).toBe('beach');
     expect(free.get(210)).toBe('towerTop');
+  });
+  it('never holds the far wide lens through the divert, even when steering from before 13 s', () => {
+    const steer = fly(true);
+    for (let k = 132; k < 260; k++) expect(steer.get(k), `tau ${k / 10}`).not.toBe('wide');
   });
 });
 
@@ -180,6 +221,25 @@ describe('camera framing', () => {
       expect(inFrame(c, horizon)).toBe(true);
     });
   }
+
+  it('desktop tower top: the ring and the pins at contact sit clear of the bottom HUD strip, horizon in frame', () => {
+    const rig = new CameraRig('towerTop', 16 / 9);
+    rig.update(shotAt({ x: 1, y: 70, z: 0 }), 0, true);
+    const c = rig.camera;
+    c.updateMatrixWorld();
+    const ring = new THREE.Vector3(0, RAIL_Y + 0.4, 0).project(c);
+    // Bottom strip ~20% of the height (ndc y < -0.6): the ring sits above it, below mid-frame.
+    expect(ring.y).toBeGreaterThan(-0.6);
+    expect(ring.y).toBeLessThan(0);
+    expect(Math.abs(ring.x)).toBeLessThan(1);
+    const fwd = new THREE.Vector3();
+    c.getWorldDirection(fwd);
+    fwd.y = 0;
+    fwd.normalize();
+    const horizon = new THREE.Vector3(TOWER_CAM.x, TOWER_CAM.y, TOWER_CAM.z).addScaledVector(fwd, 20000);
+    horizon.y = 0;
+    expect(inFrame(c, horizon)).toBe(true);
+  });
 
   it('tower top after the catch keeps the booster in the arms and the horizon in frame', () => {
     const rig = new CameraRig('towerTop', 16 / 9);
@@ -224,8 +284,8 @@ describe('camera framing', () => {
     const pos = new THREE.Vector3(0, 2, 2000);
     const pts = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 450, 0), new THREE.Vector3(30, 200, 0)];
     for (const aspect of [16 / 9, 390 / 844]) {
-      const top = safeTop(aspect);
-      const f = frameInSafe(pos, pts, aspect, top, SAFE_BOTTOM, 1.1, 1, 60);
+      const { top, bottom } = safeBand(aspect);
+      const f = frameInSafe(pos, pts, aspect, top, bottom, 1.1, 1, 60);
       const cam = new THREE.PerspectiveCamera(f.fov, aspect, 1, 10000);
       cam.position.copy(pos);
       cam.lookAt(f.target);
@@ -233,7 +293,7 @@ describe('camera framing', () => {
       for (const p of pts) {
         const q = p.clone().project(cam);
         expect(q.y).toBeLessThanOrEqual(1 - 2 * top + 1e-3);
-        expect(q.y).toBeGreaterThanOrEqual(-1 + 2 * SAFE_BOTTOM - 1e-3);
+        expect(q.y).toBeGreaterThanOrEqual(-1 + 2 * bottom - 1e-3);
         expect(Math.abs(q.x)).toBeLessThan(1);
       }
     }
@@ -246,10 +306,10 @@ describe('camera framing', () => {
 });
 
 describe('auto-director shots keep the booster in the safe frame below the HUD', () => {
-  // HUD strip: top ~20% on desktop, ~28% on phones (strip + folded board).
-  const SCREENS: [string, number, number][] = [
-    ['desktop 1280x720', 1280 / 720, 0.2],
-    ['phone 393x852', 393 / 852, 0.28],
+  // HUD strip: at the BOTTOM on desktop (~20%), at the TOP on phones (~28%: strip + folded board).
+  const SCREENS: [string, number, { top: number; bottom: number }][] = [
+    ['desktop 1280x720', 1280 / 720, { top: 0, bottom: 0.2 }],
+    ['phone 393x852', 393 / 852, { top: 0.28, bottom: 0 }],
   ];
   const RUNS: [TierId, number][] = [
     ['cadet', 1],
@@ -257,7 +317,7 @@ describe('auto-director shots keep the booster in the safe frame below the HUD',
     ['fd', 2],
     ['fd', 7],
   ];
-  for (const [label, aspect, hudTop] of SCREENS) {
+  for (const [label, aspect, hud] of SCREENS) {
     for (const [tier, seed] of RUNS) {
       it(`${tier} seed ${seed}, ${label}`, () => {
         const w = createWorld(seed, tier);
@@ -282,7 +342,7 @@ describe('auto-director shots keep the booster in the safe frame below the HUD',
           const at = (k: number): THREE.Vector3 => new THREE.Vector3(w.pos.x + axis.x * k, w.pos.y + axis.y * k, w.pos.z + axis.z * k);
           const safe = (p: THREE.Vector3): boolean => {
             const q = p.clone().project(c);
-            return q.z < 1 && Math.abs(q.x) < 1 && q.y > -1 && q.y < 1 - 2 * hudTop;
+            return q.z < 1 && Math.abs(q.x) < 1 && q.y > -1 + 2 * hud.bottom && q.y < 1 - 2 * hud.top;
           };
           const where = `${id} at t=${w.t.toFixed(1)} (tau ${tau?.toFixed(1) ?? '-'})`;
           if (id === 'towerTop') {

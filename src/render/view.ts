@@ -53,6 +53,7 @@ export class View {
   private finish: FinishPass | null = null;
   private bloom: UnrealBloomPass | null = null;
   private bloomBase = 0.6;
+  private bloomThreshold = 0.9;
   private profile: QualityProfile;
   private width = 1;
   private height = 1;
@@ -120,6 +121,7 @@ export class View {
       const bloom = p.bloom === 'half' ? new HalfBloomPass(res, 0.5, 0.55, 0.92) : new UnrealBloomPass(res, 0.62, 0.6, 0.9);
       this.bloom = bloom;
       this.bloomBase = bloom.strength;
+      this.bloomThreshold = bloom.threshold;
       composer.addPass(bloom);
       composer.addPass(new OutputPass());
       this.finish = new FinishPass();
@@ -183,7 +185,12 @@ export class View {
     const near = this.world.tuneForCamera(rig.camera.position);
     // Thirteen engines: less bloom, so the big flame keeps its colour instead of going white.
     const w = this.world;
-    if (this.bloom) this.bloom.strength = this.bloomBase * (1 - 0.6 * near) * (w.plumeMany ? 0.6 : 1);
+    if (this.bloom) {
+      this.bloom.strength = this.bloomBase * (1 - 0.6 * near) * (w.plumeMany ? 0.6 : 1);
+      // The beach long lens looks into the low sun along the hull: only real light sources
+      // (plume, lamps) bloom there, not the sun's glint on the steel.
+      this.bloom.threshold = cam === 'beach' ? Math.max(this.bloomThreshold, 0.97) : this.bloomThreshold;
+    }
 
     // Exposure pump: the ignition flash blows out, then the "camera" adapts to the bright
     // plume (more for the thirteen-engine burn).
@@ -252,6 +259,9 @@ export class View {
       const rig = this.rigs[id];
       if (Math.abs(rig.camera.aspect - w / h) > 1e-4) rig.setAspect(w / h);
       rig.update(shot, dt, snap);
+      // The beach long lens frames the whole tower for its main-shot role; in a small split
+      // panel it can drift onto empty sky. Aim it at the booster there.
+      if (id === 'beach') rig.camera.lookAt(shot.com.x, shot.com.y, shot.com.z);
       this.world.tuneForCamera(rig.camera.position);
       r.setViewport(x, y, w, h);
       r.setScissor(x, y, w, h);

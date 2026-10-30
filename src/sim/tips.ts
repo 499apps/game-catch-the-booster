@@ -1,5 +1,6 @@
 // One positive, specific tip per outcome (kid-safe wording).
 import type { Medal } from './scoring';
+import type { TierId } from './tiers';
 import type { FailReason } from './types';
 
 export const TIPS: Record<FailReason, string> = {
@@ -26,6 +27,15 @@ export const CATCH_TIPS: Record<Medal, string> = {
   none: 'Caught! Light the engines on the marker and line up with the ring for a medal.',
 };
 
-export function tipFor(reason: FailReason | null, medal: Medal = 'none'): string {
-  return reason ? TIPS[reason] : CATCH_TIPS[medal];
+/** After a Bullseye: point to the next tier (Cadet -> Pilot -> Flight Director). */
+export const BULLSEYE_NEXT: Record<TierId, string> = {
+  cadet: 'Bullseye! Pins dead centre and a soft touch. Try Pilot next: you light the engines and fly the throttle.',
+  pilot: 'Bullseye! Pins dead centre and a soft touch. Try Flight Director next for engine-outs and gusts.',
+  fd: 'Bullseye in Flight Director! Try a windy day: the Wind master bonus waits above 6 m/s.',
+};
+
+export function tipFor(reason: FailReason | null, medal: Medal = 'none', tier?: TierId): string {
+  if (reason) return TIPS[reason];
+  if (medal === 'bullseye' && tier) return BULLSEYE_NEXT[tier];
+  return CATCH_TIPS[medal];
 }

@@ -68,7 +68,7 @@ const FinishShader = {
         float r2 = dot(d, d);
         float glow = 0.012 / (r2 * 60.0 + 0.012);
         // A thin anamorphic line, only in the ignition flash.
-        float streak = exp(-abs(d.y) * 1700.0) * exp(-abs(d.x) * 2.6);
+        float streak = exp(-abs(d.y) * 1700.0) * exp(-abs(d.x) * 9.0);
         vec3 warm = vec3(1.0, 0.62, 0.32);
         c += uFlare * warm * glow * 0.45 + uStreak * vec3(1.0, 0.72, 0.5) * streak * 0.55;
         if (uGhost > 0.0) {

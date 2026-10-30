@@ -503,8 +503,14 @@ summary:focus-visible {
   letter-spacing: 0.12em;
 }
 #telemetry .v {
+  display: inline-block;
   font-weight: 800;
   font-size: 20px;
+  white-space: nowrap;
+}
+/* Full labels on wide screens; the compact phone strip swaps in the short ones. */
+#telemetry .k .short {
+  display: none;
 }
 #telemetry .v.sm {
   font-size: 12px;
@@ -1289,10 +1295,21 @@ summary:focus-visible {
 .replaying #captions {
   bottom: calc(var(--sb) + 90px);
 }
+/* In a replay the strip moves to the top-left: the camera tag ("REPLAY · SYNCED CAMS") goes
+   just above the replay bar, so the strip's brand never covers it. */
+.replaying #camera-tag,
+.touch.replaying #camera-tag {
+  top: auto;
+  left: calc(var(--sl) + 76px);
+  transform: none;
+  bottom: calc(var(--sb) + 76px);
+  z-index: 31;
+}
 #split-labels {
   position: absolute;
   inset: 0;
-  z-index: 5;
+  /* Above the replay bar (z 30): the labels never hide behind it. */
+  z-index: 31;
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
@@ -1312,7 +1329,12 @@ summary:focus-visible {
 }
 @media (max-width: 760px), (max-height: 520px) {
   #split-labels span:nth-child(n + 3) {
-    margin-bottom: calc(var(--sb) + 128px);
+    margin-bottom: calc(var(--sb) + 150px);
+  }
+  .replaying #camera-tag,
+  .touch.replaying #camera-tag {
+    left: calc(var(--sl) + 12px);
+    bottom: calc(var(--sb) + 124px);
   }
 }
 
@@ -1433,11 +1455,12 @@ summary:focus-visible {
   left: 50%;
   transform: translateX(-50%);
 }
+/* Phones: SLOW-MO sits under the strip, top left, clear of the CATCH button and the thumbs. */
 .touch #slowmo {
-  top: auto;
-  bottom: calc(var(--sb) + 30px);
-  left: 50%;
-  transform: translateX(-50%);
+  top: calc(var(--st) + 150px);
+  bottom: auto;
+  left: calc(var(--sl) + 12px);
+  transform: none;
 }
 .touch #pip {
   top: calc(var(--st) + 120px);
@@ -1505,15 +1528,33 @@ summary:focus-visible {
    */
   #telemetry {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr) auto;
+    /* Columns size to their content (nothing clips); the spare width goes between them. */
+    grid-template-columns: repeat(5, auto);
+    justify-content: space-between;
     grid-template-areas:
       'ring alt vs stop time'
-      'tol tol tol wind wind'
+      'tol tol tol tol wind'
       'board board board board board';
-    gap: 3px 6px;
+    gap: 3px 4px;
     align-items: center;
     font-size: 12px;
     padding: 5px 8px;
+  }
+  /* Short labels in the compact strip ("ALT", not "ALTITUDE"); units that fit the chips. */
+  #telemetry .k .long,
+  #telemetry .vs-unit,
+  #engine-ring .count {
+    display: none;
+  }
+  #telemetry .k .short {
+    display: inline;
+  }
+  #telemetry .vs-cell,
+  #telemetry .cell {
+    min-width: max-content;
+  }
+  #telemetry .tolerances {
+    flex-wrap: wrap;
   }
   #telemetry .brand,
   #telemetry .c-speed,
@@ -1527,8 +1568,8 @@ summary:focus-visible {
   }
   #engine-ring {
     grid-area: ring;
-    width: 40px;
-    height: 40px;
+    width: 32px;
+    height: 32px;
   }
   #telemetry .c-altitude {
     grid-area: alt;
@@ -1550,17 +1591,14 @@ summary:focus-visible {
     grid-area: wind;
     justify-self: end;
   }
-  #telemetry .cell {
-    overflow: hidden;
-  }
   #telemetry .v {
     font-size: 16px;
   }
   #telemetry .clock {
-    font-size: 15px;
+    font-size: 13px;
   }
   #telemetry .chip.tol {
-    padding: 1px 5px;
+    padding: 1px 4px;
     font-size: 12px;
   }
   #gonogo,

@@ -8,16 +8,11 @@ import type { TierId } from '../sim/tiers';
 import { engineLayout } from '../render/scene';
 import type { InputDevices } from '../input/devices';
 import { el, setText, show, svgEl } from './dom';
+import type { Tone } from './tolerance';
 
-/** In / near / out of tolerance. Every tone also has its own glyph. */
-export type Tone = 'ok' | 'warn' | 'bad';
 const TONE_GLYPH: Record<Tone, string> = { ok: '✓', warn: '!', bad: '✕' };
-
-/** Tone for a value against a limit: ok below half of it, warn below it, bad at or above. */
-export function toneFor(value: number, limit: number): Tone {
-  const v = Math.abs(value);
-  return v < 0.5 * limit ? 'ok' : v < limit ? 'warn' : 'bad';
-}
+/** A glyph for a tone, or nothing for a neutral (null) tone. */
+const glyph = (t: Tone | null): string => (t ? ` ${TONE_GLYPH[t]}` : '');
 
 export interface HudData {
   tier: TierId;
@@ -54,12 +49,12 @@ export interface HudData {
   fps: number | null;
   paused: boolean;
   /**
-   * Pins vs the arm centreline: distance (m), the screen direction to steer (unit, x right,
-   * z down the screen) and the tone against the tier's pin window. Null hides the chip.
+   * Pins vs the arm centreline (Cadet: the aim error): distance (m), the screen direction to
+   * steer (unit, x right, z down the screen) and the tone (null = neutral). Null hides the chip.
    */
-  pin: { dist: number; sx: number; sz: number; tone: Tone } | null;
-  /** Tilt from vertical (deg) and its tone against the tier's tilt limit. */
-  tilt: { deg: number; tone: Tone } | null;
+  pin: { dist: number; sx: number; sz: number; tone: Tone | null } | null;
+  /** Tilt from vertical (deg) and its tone (null = neutral, see src/ui/tolerance.ts). */
+  tilt: { deg: number; tone: Tone | null } | null;
   /** V/S tone against the 2 m/s contact limit near the arms; null far from them (neutral). */
   vsTone: Tone | null;
   /** Seconds to the ideal ignition while the 3-2-1 cue shows (every tier); null hides it. */
@@ -80,6 +75,9 @@ const BOARD_LABELS: [keyof HealthBoard, string][] = [
   ['arms', 'ARMS'],
   ['comms', 'COMMS'],
 ];
+
+/** m: the Cadet aim error under which the steer cue says "On the ring". */
+export const CADET_ON_RING = 0.15;
 
 const PHASE_LABEL: Record<Phase, string> = {
   coast: 'FINAL APPROACH',
@@ -183,8 +181,16 @@ export class Hud {
     ring.append(this.ringCount);
     const gauge = el('span', { id: 'stop-gauge' }, [el('b'), this.stopMark]);
     const propBar = el('span', { class: 'bar' }, [this.propFill]);
+    // A cell with its label; a long label also gets a short form for the compact phone strip.
+    const SHORT: Record<string, string> = { ALTITUDE: 'ALT' };
+    const label = (k: string): HTMLSpanElement => {
+      const s = SHORT[k];
+      return s
+        ? el('span', { class: 'k' }, [el('span', { class: 'long', text: k }), el('span', { class: 'short', text: s })])
+        : el('span', { class: 'k', text: k });
+    };
     const cell = (k: string, ...v: (HTMLElement | string)[]): HTMLSpanElement =>
-      el('span', { class: `cell c-${k.toLowerCase()}` }, [el('span', { class: 'k', text: k }), el('span', { class: 'row' }, v)]);
+      el('span', { class: `cell c-${k.toLowerCase()}` }, [label(k), el('span', { class: 'row' }, v)]);
 
     // Wind: an arrow (top-down, sea to the right), the speed, gust bars and a shear tag.
     const windSvg = svgEl('svg', { viewBox: '-10 -10 20 20', class: 'wind-dial', 'aria-hidden': 'true' });
@@ -213,7 +219,7 @@ export class Hud {
     this.pinArrow.append(svgEl('path', { d: 'M-5 0 H4 M0.5 -3.5 L4.5 0 L0.5 3.5', class: 'arrow' }));
     pinSvg.append(this.pinArrow);
     this.pinChip.append(el('span', { class: 'k', text: 'PIN' }), pinSvg, this.pinText);
-    this.vsChip.append(this.vsGlyph);
+    this.vsChip.append(el('span', { class: 'vs-unit', text: 'm/s' }), this.vsGlyph);
     const tol = el('span', { class: 'cell tolerances' }, [this.pinChip, this.tiltChip]);
 
     const telemetry = el('div', { id: 'telemetry', 'data-testid': 'telemetry' }, [
@@ -392,11 +398,12 @@ export class Hud {
       setText(this.altU, 'M');
     }
     setText(this.spd, fmt(d.speed * 3.6));
-    setText(this.vs, `${fmt(d.vs, 1)} m/s`);
+    setText(this.vs, fmt(d.vs, 1));
     // V/S against the 2 m/s contact limit (coloured near the arms, with a glyph).
     const vsCls = `chip tol vs${d.vsTone ? ` ${d.vsTone}` : ''}`;
     if (this.vsChip.className !== vsCls) this.vsChip.className = vsCls;
     setText(this.vsGlyph, d.vsTone ? TONE_GLYPH[d.vsTone] : '');
+    this.vsGlyph.hidden = !d.vsTone;
 
     // Pin offset: distance, a screen-space arrow the way to steer, tone vs the pin window.
     show(this.pinChip, d.pin !== null);
@@ -405,24 +412,26 @@ export class Hud {
       const ang = (Math.atan2(p.sz, p.sx) * 180) / Math.PI;
       this.pinArrow.setAttribute('transform', `rotate(${ang.toFixed(0)})`);
       this.pinArrow.style.opacity = p.tone === 'ok' ? '0.35' : '1';
-      setText(this.pinText, `${fmt(p.dist, p.dist < 10 ? 1 : 0)} m ${TONE_GLYPH[p.tone]}`);
-      const cls = `chip tol ${p.tone}`;
+      setText(this.pinText, `${fmt(p.dist, p.dist < 10 ? 1 : 0)} m${glyph(p.tone)}`);
+      const cls = `chip tol${p.tone ? ` ${p.tone}` : ''}`;
       if (this.pinChip.className !== cls) this.pinChip.className = cls;
     }
     show(this.tiltChip, d.tilt !== null);
     if (d.tilt) {
-      setText(this.tiltChip, `TILT ${fmt(d.tilt.deg, 1)}° ${TONE_GLYPH[d.tilt.tone]}`);
-      const cls = `chip tol ${d.tilt.tone}`;
+      setText(this.tiltChip, `TILT ${fmt(d.tilt.deg, 1)}°${glyph(d.tilt.tone)}`);
+      const cls = `chip tol${d.tilt.tone ? ` ${d.tilt.tone}` : ''}`;
       if (this.tiltChip.className !== cls) this.tiltChip.className = cls;
     }
 
-    // Cadet steer cue: a big arrow toward the ring, in screen space.
+    // Cadet steer cue: a big arrow from the aim point toward the ring centre, in screen space.
     show(this.steer, d.steerCue && d.pin !== null);
     if (d.steerCue && d.pin) {
+      const on = d.pin.dist < CADET_ON_RING;
       const ang = (Math.atan2(d.pin.sz, d.pin.sx) * 180) / Math.PI;
       this.steerArrow.setAttribute('transform', `rotate(${ang.toFixed(0)})`);
-      setText(this.steerText, d.pin.tone === 'ok' ? `On the ring ✓ ${fmt(d.pin.dist, 1)} m` : `Steer onto the ring · ${fmt(d.pin.dist, 1)} m`);
-      const cls = d.pin.tone;
+      this.steerArrow.style.opacity = on ? '0' : '1';
+      setText(this.steerText, on ? 'On the ring ✓' : `Steer onto the ring · ${fmt(d.pin.dist, 1)} m`);
+      const cls = on ? 'ok' : '';
       if (this.steer.className !== cls) this.steer.className = cls;
     }
 

@@ -48,6 +48,9 @@ const MAX_PARTICLES = 1400;
 const OUTER_ENGINES = 20;
 const BASE_Y = -COM_ABOVE_BASE; // engine plane in booster coordinates
 const TOP_Y = BOOSTER_LENGTH - COM_ABOVE_BASE;
+/** Base steam (wash) left at the engine cutoff on the catch, and the seconds it takes to clear. */
+const WASH_AT_CUTOFF = 0.8;
+const WASH_DECAY = 6;
 /** The target ring geometry has this radius; it is scaled to the hull radius + pin window. */
 const RING_UNIT = 6;
 /** Ring tint per tolerance: in the window, near its edge, outside it. */
@@ -95,6 +98,8 @@ export interface FrameState {
   reducedMotion: boolean;
   /** 0..1: held in the arms. Cold vapour vents from the booster and the crowd cheers. */
   vent: number;
+  /** Seconds since engine cutoff at the catch (null: not cut off yet). The base steam decays over it. */
+  sinceCutoff?: number | null;
   /** Main-menu hero shot: a warmer, stronger rim from the low sun. */
   hero: boolean;
 }
@@ -189,6 +194,7 @@ export class WorldScene {
   private readonly levels = new Float32Array(ENGINE_COUNT);
   private prevLit = 0;
   private flashAt = -1e9;
+  private lastSimT = -1e9;
   private lastT = -1;
   private wash = 0;
   private readonly washAt = new THREE.Vector3();
@@ -256,11 +262,13 @@ export class WorldScene {
       roughnessMap: tex.roughMetal,
       normalMap: tex.normal,
       normalScale: new THREE.Vector2(0.55, 0.55),
-      anisotropy: 0.5,
+      // Low anisotropy and a softer sky reflection: a strong anisotropic highlight drew one
+      // long white column down the hull in the low sun (the post-cutoff "white hull").
+      anisotropy: 0.2,
       emissive: PLUME_COLOR.clone(),
       emissiveMap: tex.glow,
       emissiveIntensity: 0,
-      envMapIntensity: 1.1,
+      envMapIntensity: 0.95,
     });
     const hull = new THREE.Mesh(new THREE.CylinderGeometry(R, R, BOOSTER_LENGTH, 96, 1, true), this.hullMat);
     hull.position.y = BOOSTER_LENGTH / 2 - COM_ABOVE_BASE;
@@ -1022,9 +1030,14 @@ export class WorldScene {
     if (this.glows.instanceColor) this.glows.instanceColor.needsUpdate = true;
     this.cores.instanceMatrix.needsUpdate = true;
 
-    // Ignition flash on the first engines to light.
-    if (lit > 0 && this.prevLit === 0) this.flashAt = f.simT;
+    // Ignition flash on the first engines to light, only when the sim got there by playing on
+    // (not on a jump: still frames, replay seeks and capture jumps land mid-burn, and must not
+    // flash). A jump also cancels a flash still fading.
+    const jumped = Math.abs(f.simT - this.lastSimT) > 0.5;
+    if (jumped) this.flashAt = -1e9;
+    else if (lit > 0 && this.prevLit === 0) this.flashAt = f.simT;
     this.prevLit = lit;
+    this.lastSimT = f.simT;
     const since = f.simT - this.flashAt;
     this.flash = since >= 0 && since < 3 ? Math.exp(-since / 0.45) : 0;
     if (f.reducedMotion) this.flash *= 0.35;
@@ -1152,7 +1165,11 @@ export class WorldScene {
     const ground = Math.max(0, terrainHeight(ix, iz));
     // How high the plume still stirs the surface (a tight 3-engine pillar reaches far down).
     const reach = lit > 3 ? 150 : 160;
-    const target = lit > 0 ? Math.max(0, Math.min(1, 1 - (by - ground) / reach)) : 0;
+    let target = lit > 0 ? Math.max(0, Math.min(1, 1 - (by - ground) / reach)) : 0;
+    // After the cutoff at the catch, the steam at the base dies away over WASH_DECAY seconds,
+    // also when the frame jumps there (a seek or a still): it does not snap to nothing.
+    const sc = f.sinceCutoff;
+    if (sc !== null && sc !== undefined && sc >= 0) target = Math.max(target, WASH_AT_CUTOFF * Math.max(0, 1 - sc / WASH_DECAY));
     if (fresh) {
       this.wash = target;
       this.washAt.set(ix, ground, iz);

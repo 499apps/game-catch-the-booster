@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CADET_AIM_MAX,
   CADET_AIM_RATE,
+  COM_ABOVE_BASE,
   DT,
   TIER_CONFIG,
   cadetAimLimit,
@@ -37,25 +38,33 @@ import {
 
 const clamp1 = (v: number): number => Math.max(-1, Math.min(1, v));
 
-type CadetHands = 'off' | 'aim' | 'slam' | 'away';
+type CadetHands = 'off' | 'aim' | 'slam' | 'hold' | 'away';
 
 /**
  * A Cadet run, stick in world axes.
  *  off:  hands off.
  *  aim:  steers the end of the ghost path (the aim point, drawn on screen) onto the ring
  *        centre, in proportion to its distance, with a 0.1 m dead band.
- *  slam: a kid who holds full stick along the HUD arrow (pins -> ring) from the moment it shows.
+ *  slam: a kid who holds full stick along the HUD arrow (aim -> ring centre, as the HUD now
+ *        draws it) from the moment it shows, and keeps following it.
+ *  hold: a kid who pushes full stick the way the arrow first pointed and never lets go.
  *  away: full stick away from the ring the whole time (the worst a player can do).
  */
 function flyCadet(seed: number, hands: CadetHands): World {
   const w = createWorld(seed, 'cadet');
+  let held: { x: number; z: number } | null = null;
   while (!w.done && w.step < 120 * 90) {
     const input: PilotInput = { ...NEUTRAL_INPUT };
     const p = pinPosition(w.pos, w.tilt);
     const d = Math.hypot(p.x, p.z);
-    if (w.flags.divert && hands === 'slam' && d > 1e-6) {
-      input.stickX = -p.x / d;
-      input.stickZ = -p.z / d;
+    const ad = Math.hypot(w.aim.x, w.aim.z);
+    if (w.flags.divert && hands === 'slam' && ad > 1e-6) {
+      input.stickX = -w.aim.x / ad;
+      input.stickZ = -w.aim.z / ad;
+    } else if (w.flags.divert && hands === 'hold') {
+      held ??= ad > 1e-6 ? { x: -w.aim.x / ad, z: -w.aim.z / ad } : { x: 1, z: 0 };
+      input.stickX = held.x;
+      input.stickZ = held.z;
     } else if (w.flags.divert && hands === 'away' && d > 1e-6) {
       input.stickX = p.x / d;
       input.stickZ = p.z / d;
@@ -124,6 +133,33 @@ describe('Cadet: the divert swings in by itself; the stick moves its aim point',
       expect(sb.alignment, report.join(' | ')).toBeGreaterThanOrEqual(sa.alignment);
     }
     expect(steered, report.join(' | ')).toBeGreaterThan(alone);
+  });
+
+  it('full stick along the HUD arrow (followed, or held the first way) never scores worse than hands-off', () => {
+    const report: string[] = [];
+    for (let seed = 1; seed <= 8; seed++) {
+      const off = scoreWorld(flyCadet(seed, 'off'));
+      for (const hands of ['slam', 'hold'] as const) {
+        const w = flyCadet(seed, hands);
+        const s = scoreWorld(w);
+        report.push(`${seed} ${hands}: ${off.alignment} -> ${s.alignment} (${w.outcome?.reason ?? 'caught'})`);
+        expect(w.outcome?.caught, report.join(' | ')).toBe(true);
+        expect(s.alignment, report.join(' | ')).toBeGreaterThanOrEqual(off.alignment);
+        // The other parts (contact speed, load, fuel) may differ by a few points of noise.
+        expect(s.total, report.join(' | ')).toBeGreaterThanOrEqual(off.total - 10);
+      }
+    }
+  });
+
+  it('the stick only ever brings the aim closer to the ring centre', () => {
+    const w = createWorld(2, 'cadet');
+    let last = Infinity;
+    while (!w.done && w.step < 120 * 90) {
+      stepWorld(w, commandFor(w, { ...NEUTRAL_INPUT, stickX: 1, stickZ: -0.4 }, false));
+      const a = Math.hypot(w.aim.x, w.aim.z);
+      expect(a).toBeLessThanOrEqual(last + 1e-12);
+      last = a;
+    }
   });
 
   it('no stick input can make a Cadet fail: full stick toward or away from the ring still catches', () => {
@@ -312,10 +348,17 @@ function flyHuman(seed: number): { world: World; poll: string } {
   const trace: string[] = [];
   const rng = makeRng(seed, 99);
   const delay = Math.round(0.25 / DT);
-  const seen: { px: number; pz: number; vx: number; vz: number; down: number; hp: number; ignite: boolean; prompt: boolean }[] = [];
+  const seen: { px: number; pz: number; vx: number; vz: number; down: number; alt: number; ignite: boolean; prompt: boolean }[] = [];
   // Gain on the visible offset, and the lead: a human steers on where it is heading (~1.5 s).
   const K = 0.1;
   const LEAD = 1.5;
+  // Throttle: the rails' ALT readout, a starting lever, PI gains (lever per m/s, per m).
+  const RAILS_ALT = 36;
+  const LEVER_TRIM = 0.1;
+  const LEVER_KP = 0.06;
+  const LEVER_KI = 0.02;
+  let leverI = 0;
+  let leverNoise = 0;
   let noiseX = 0;
   let noiseZ = 0;
   let lit = false;
@@ -329,16 +372,17 @@ function flyHuman(seed: number): { world: World; poll: string } {
       pz: p.z,
       vx: w.vel.x,
       vz: w.vel.z,
-      down,
-      hp,
-      ignite: w.pos.y <= idealIgnitionHeight(down),
-      prompt: w.flags.catchPrompt,
+      down, // the V/S readout
+      alt: w.pos.y - COM_ABOVE_BASE, // the ALT readout
+      ignite: w.pos.y <= idealIgnitionHeight(down), // the 3-2-1 cue reaching LIGHT
+      prompt: w.flags.catchPrompt, // the CATCH button showing
     });
     if (seen.length > delay + 1) seen.shift();
     const v = seen[0]!; // what the player reacts to now
     if (w.step % 12 === 0) {
       noiseX = 0.06 * gauss(rng);
       noiseZ = 0.06 * gauss(rng);
+      leverNoise = 0.01 * gauss(rng);
     }
     const input: PilotInput = { ...NEUTRAL_INPUT, throttle: 1 };
     if (w.phase === 'coast') {
@@ -355,12 +399,15 @@ function flyHuman(seed: number): { world: World; poll: string } {
     } else if (w.phase === 'burn3') {
       input.stickX = clamp1(-K * (v.px + LEAD * v.vx) + noiseX);
       input.stickZ = clamp1(-K * (v.pz + LEAD * v.vz) + noiseZ);
-      // V/S profile: come down at 0.6 + sqrt(2 a h) m/s, braking at a = 1.2 m/s^2.
+      // V/S profile from the HUD only: the height left is the ALT readout minus the rails'
+      // ALT (~36 m, known from the ring); come down at 0.6 + sqrt(2 a h) m/s (a = 1.2 m/s^2).
+      // The lever is a plain PI on the V/S error (too fast -> more lever); the integral finds
+      // the hover lever by feel. No mass, no thrust table.
       const a = 1.2;
-      const want = 0.6 + Math.sqrt(2 * a * Math.max(0, v.hp));
-      const up = a + 0.8 * (v.down - want);
-      const frac = (massOf(w) * (G0 + up)) / (3 * ENGINE_THRUST);
-      input.throttle = Math.max(0, Math.min(1, (frac - THROTTLE_MIN) / (1 - THROTTLE_MIN)));
+      const want = 0.6 + Math.sqrt(2 * a * Math.max(0, v.alt - RAILS_ALT));
+      const e = v.down - want;
+      leverI = Math.max(-0.2, Math.min(0.6, leverI + LEVER_KI * e * DT));
+      input.throttle = Math.max(0, Math.min(1, LEVER_TRIM + leverI + LEVER_KP * e + leverNoise));
       // Press and hold CATCH when the button shows (as the tip says), a reaction late.
       if (!pressed && v.prompt) {
         pressed = true;
@@ -408,7 +455,7 @@ describe('Go/No-Go track check measures reach from the arms', () => {
 });
 
 describe('Pilot fairness: a simple human strategy catches', () => {
-  it('catches on at least 3 of 5 seeds, with the ~30 s burn the design wants', () => {
+  it('catches on at least 4 of 5 seeds, with the ~30 s burn the design wants', () => {
     let caught = 0;
     const report: string[] = [];
     const burns: number[] = [];
@@ -428,7 +475,7 @@ describe('Pilot fairness: a simple human strategy catches', () => {
           ` prop=${(w.propellant / 1000).toFixed(1)}t ${poll}`,
       );
     }
-    expect(caught, report.join(' | ')).toBeGreaterThanOrEqual(3);
+    expect(caught, report.join(' | ')).toBeGreaterThanOrEqual(4);
     for (const b of burns) {
       expect(b, report.join(' | ')).toBeGreaterThan(26);
       expect(b, report.join(' | ')).toBeLessThan(38);

@@ -132,6 +132,52 @@ I could not read the gate report (`C:\Users\a\claude-tasks\catch\gate1.result.md
   - Authority: the spread from +1 to -1 is at least 25 m, and each side is more than 6 m from hands-off. The response is not exactly symmetric: while the damping is at its clamp braking a drift, steering against the drift desaturates it sooner.
   - A held stick reaches more than 2 m/s in 8 s with no overshoot (about 3.5 m/s expected).
 
+## c6: gate-2 fixes
+
+I could not run any tools. All of c6 is unverified until the operator runs the checks.
+
+| # | Item | Fix | Files |
+| --- | --- | --- | --- |
+| 1 | Cadet steer cue | The PIN chip and the big arrow come from the aim error (`w.aim`), so they answer the stick at once. The tone is neutral until `w.flags.hover`. The arrow says "On the ring ✓" under 0.15 m. Sim rule: the Cadet stick can only bring the aim closer to the ring centre, so a stick held the same way stops at the closest point. No input can score worse than hands-off. The tutorial text now says: push the way the yellow arrow points. | `src/app/game.ts`, `src/ui/hud.ts`, `src/sim/world.ts`, `src/ui/tutorialView.ts` |
+| 2 | Camera in the divert | `wide` only from +10 to +13 s. At `T_DIVERT` the director cuts to `beach`, and `STEER_HOLD` holds only a steering lens (`beach`, `towerTop`), so the cut at +13 s still happens. | `src/render/cameras.ts` |
+| 3 | No red while nominal | New pure module `src/ui/tolerance.ts`. TILT on 13 engines: neutral (the braking lean reaches ~35° by design). TILT on 3 engines above 30 m: neutral, then warn or bad against the 30° abort. PIN: neutral above 30 m. Final approach (≤ 30 m): contact limits. The ring stays teal above 30 m. | `src/ui/tolerance.ts`, `src/app/game.ts`, `src/ui/hud.ts` |
+| 4 | Phone strip clipping | Grid columns sized by their content (`repeat(5, auto)`, space-between), row 2 `'tol tol tol tol wind'`, cells `min-width: max-content`, no `overflow: hidden`. Short label "ALT" in the compact strip. V/S unit and engine count hidden on phones. Ring 32 px, clock 13 px. New e2e check on iphone-15 and pixel-7: no element in the strip has scrollWidth > clientWidth + 1. | `src/ui/styles.css`, `src/ui/hud.ts`, `tests/e2e/ux.spec.ts` |
+| 5 | Desktop tower-top framing | New `safeBand(aspect)`: on landscape the HUD band is at the BOTTOM (22%), on portrait at the top (30%). The safe-frame test now uses the bottom band on desktop. On landscape the tower-top lens is 120° wide and pitched down to 3° under the horizon. The ring and the pins at contact sit at about one third of the frame height (ndc ≈ -0.33), above the strip. The 40% target is not reachable with the horizon in frame. New test. | `src/render/cameras.ts`, `tests/unit/render.test.ts` |
+| 6 | Flash on seeks | No ignition flash when the sim time jumps by more than 0.5 s (stills, replay seeks, capture jumps). A jump also cancels a flash still fading. The streak sideways falloff is now 9, was 2.6. | `src/render/scene.ts`, `src/render/post.ts` |
+| 7 | White hull after cutoff | Hull anisotropy 0.5 → 0.2 and env reflection 1.1 → 0.95. Bloom threshold ≥ 0.97 on the beach lens (only plume and lamps bloom there). The base steam starts at 0.8 after the cutoff and fades over 6 s. On a seek the steam is set to the faded value. | `src/render/scene.ts`, `src/render/view.ts`, `src/app/game.ts` |
+| 8 | Pilot bot honesty | The throttle uses only the V/S and ALT readouts: profile height = ALT - 36 m (the rails). The lever is PI (trim 0.1, Kp 0.06 per m/s, Ki 0.02), with lever noise. There is no mass or thrust table. 250 ms delay. Requires 4 of 5 seeds. I made no sim change for it. | `tests/unit/assist.test.ts` |
+| 9 | Capture | New hooks `manual=1`, `stick=` and a negative `at`, and `tutorial=1` in still mode. New stills on desktop and iPhone: `cadet-cue` (-2 s), `cadet-steer` (+13.5 s, stick held), `tutorial-steer`. | `src/app/params.ts`, `src/app/game.ts`, `scripts/capture.mjs` |
+| 10 | Small defects | The replay camera tag sits above the replay bar (clear of the brand). The split labels are above the bar (z 31; phones +150 px). The beach split panel aims at the booster. SLOW-MO on phones moved to the top left. The Bullseye tip names the next tier. The debrief best includes this run ("★ New best" also in still mode). | `src/ui/styles.css`, `src/render/view.ts`, `src/sim/tips.ts`, `src/app/game.ts` |
+
+**Tests added or changed:**
+
+- `assist.test.ts`:
+  - Full stick along the HUD arrow, followed or held the first way, scores ≥ hands-off on 8 seeds.
+  - The stick never moves the aim away from the centre.
+  - The slam bot follows the new aim arrow.
+  - The honest Pilot bot must catch on 4 of 5 seeds.
+- `render.test.ts`:
+  - Tolerance tones.
+  - The director cut at +13 s and the hold (the hold is now on `beach`).
+  - Desktop tower-top ring position.
+  - `safeBand`, with the bottom band on desktop in the safe-frame test.
+  - Bullseye next-tier tips.
+- `ux.spec.ts`: the phone strip clipping check.
+
+**Visual baselines change** (the HUD tones, the tower-top framing and no flash in stills). Regenerate them after the e2e run passes.
+
+**If the Pilot 4-of-5 test fails:** the bot is now strictly HUD-only. Send me the report line. If needed, I will tune the bot gains first. If it still cannot reach 4 of 5 honestly, I will set the test back to 3 of 5 and explain why.
+
+## c6b: tower-top framing for a high booster
+
+On landscape, the tower-top pitch now blends with the CoM height:
+
+- Below 170 m: the pitch is the c6 one, down until the horizon is 3° inside the top edge.
+- Above 230 m: the lens looks up at the booster, which sits a third of the half-height above the frame centre.
+- Between 170 m and 230 m: a smoothstep blend of the two.
+
+So a player who picks Tower Top mid-divert still sees the booster.
+
 ## Commands for the operator (in order)
 
 1. `pnpm typecheck`

@@ -11,11 +11,11 @@ const TEXT: Record<CardStep, { title: string; how: Record<InputKind, string>; hi
   steer: {
     title: '1 · Steer',
     how: {
-      touch: 'Drag the round pad. The end of the glowing path moves that way on the screen.',
-      keys: 'Hold A, D, W or S (or the arrows). The end of the glowing path moves that way on the screen.',
-      pad: 'Push the left stick. The end of the glowing path moves that way on the screen.',
+      touch: 'Drag the round pad the way the yellow arrow points. The end of the glowing path moves onto the ring.',
+      keys: 'Hold A, D, W or S (or the arrows) the way the yellow arrow points. The end of the glowing path moves onto the ring.',
+      pad: 'Push the left stick the way the yellow arrow points. The end of the glowing path moves onto the ring.',
     },
-    hint: 'Hold the stick to one side for a moment.',
+    hint: 'Hold the stick the way the arrow points until it says "On the ring".',
   },
   light: {
     title: '2 · Light the engines',

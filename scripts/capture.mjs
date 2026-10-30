@@ -45,6 +45,15 @@ const STILLS = [
   ['debrief', 'still=1&tier=cadet&seed=1&debrief=1&quality=medium'],
 ];
 
+/** Player's-view stills (no autopilot): the 3-2-1 cue, the steer arrow with the stick held, the tutorial. */
+const MANUAL_STILLS = [
+  ['cadet-cue', 'still=1&tier=cadet&seed=1&manual=1&at=-2&quality=medium'],
+  ['cadet-steer', 'still=1&tier=cadet&seed=1&manual=1&stick=-1&at=13.5&quality=medium'],
+  ['tutorial-steer', 'still=1&tier=cadet&seed=1&tutorial=1&quality=medium'],
+];
+/** The player's-view stills are taken on these profiles. */
+const MANUAL_PROFILES = ['desktop', 'iphone'];
+
 function log(msg) {
   console.log(`[capture] ${msg}`);
 }
@@ -112,7 +121,8 @@ async function shot(page, profile, name) {
 async function captureStills(browser, profile) {
   const ctx = await browser.newContext({ ...profile.use, serviceWorkers: 'block' });
   const page = await ctx.newPage();
-  for (const [name, q] of STILLS) {
+  const stills = MANUAL_PROFILES.includes(profile.name) ? [...STILLS, ...MANUAL_STILLS] : STILLS;
+  for (const [name, q] of stills) {
     await page.goto(`${BASE}?${q}`);
     await waitReady(page);
     await page.waitForTimeout(400);
