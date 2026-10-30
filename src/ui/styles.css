@@ -1533,8 +1533,10 @@ summary:focus-visible {
     justify-content: space-between;
     grid-template-areas:
       'ring alt vs stop time'
-      'tol tol tol tol wind'
+      'tol tol tol wind wind'
       'board board board board board';
+    /* Row 2: the tolerance chips wrap; the wind (with SHEAR in Flight Director) spans the
+       STOP and clock columns, so it never widens the clock column past the screen. */
     gap: 3px 4px;
     align-items: center;
     font-size: 12px;
