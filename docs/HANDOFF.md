@@ -112,6 +112,26 @@ I could not read the gate report (`C:\Users\a\claude-tasks\catch\gate1.result.md
   - The envelope boundary test now covers FD 1.5 m, Pilot 2.5 m and Cadet 3 m.
   - The Pilot bot (V/S braking profile at 1.2 m/s²) checks ignition to contact at 26 to 38 s on caught runs. Its report shows the real pins, the CoM and the sideways speed at the end of the run.
 
+## C5g: Pilot final approach and step-down
+
+- **Final approach (pins < 30 m, blended over 30-40 m): station-keeping.**
+  - The stick commands a lateral velocity: at most 1.5 m/s, fading to 0.6 m/s at the rails (the contact limit is 1 m/s).
+  - A firm hold tracks it (time constant 1.1 s).
+  - The hold lean is at most 6°, fading to 1.5° at the rails (the contact limit is 2°).
+  - So a hand-flown approach cannot arrive sliding or tilted. In c5f, the stronger stick and softer hold did the opposite and oscillated.
+- **Damping uses the centre of percussion** (CoM velocity + 11.7 m × tilt rate), as the autopilot does. The gimbal side force first moves the CoM the wrong way. A firm hold on the CoM velocity chases that (a right-half-plane zero near 1 rad/s) and oscillates.
+- **The 13-to-3 kick.**
+  - Cause: when the step came early (about +3.2 s), the 13-engine guidance lean (about ±0.1 to 0.3) carried over. 3-engine thrust is high at that moment, and the slow 0.1 rad/s slew took about 3 s to take the lean back. Meanwhile the booster flew sideways on it, at -8 to -16 m/s.
+  - Fix:
+    - On 13 engines, the allowed lean fades from 35° to 2° as the fall slows from 120 to 60 m/s.
+    - The 13-engine command moves at most 0.3 rad/s, so no rotation remains.
+    - The 3-engine slew is back to the autopilot's 0.2 rad/s.
+- **Kept:** the c5f interlock (≤ 1 s, 35 m/s floor, player throttle), the 2.5 m Pilot window, the 45/55 stick and damping shares, and the timeline.
+- **Thresholds, and why:**
+  - Step-down: |tilt| ≤ the 3-engine lean limit + 0.02 (0.28). Full stick plus full damping may reach 15° (0.259) by design, so 0.2 tested the wrong thing.
+  - Authority: the spread from +1 to -1 is at least 25 m, and each side is more than 6 m from hands-off. The response is not exactly symmetric: while the damping is at its clamp braking a drift, steering against the drift desaturates it sooner.
+  - A held stick reaches more than 2 m/s in 8 s with no overshoot (about 3.5 m/s expected).
+
 ## Commands for the operator (in order)
 
 1. `pnpm typecheck`

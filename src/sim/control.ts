@@ -11,7 +11,7 @@
 //  Flight Director: direct gimbal and throttle; the player makes the Go/No-Go call.
 // The stick is already in world axes here: the game rotates it by the camera yaw first.
 import { CADET_AIM_RATE, autopilotCommand, guidanceAccel } from './autopilot';
-import { DT, G0, RAD, THROTTLE_MAX, THROTTLE_MIN } from './constants';
+import { COP_ABOVE_COM, DT, G0, RAD, THROTTLE_MAX, THROTTLE_MIN } from './constants';
 import { massOf } from './dynamics';
 import { pinHeightAboveRails } from './predictor';
 import { idealIgnitionHeight } from './reference';
@@ -26,6 +26,17 @@ export const CADET_TAP_WINDOW = 0.3;
 export const PILOT_LEAN_LIMIT_13 = Math.sin(35 * RAD);
 /** sin of the lean bias the stick adds on 13 engines (3 deg): a nudge, it cannot overshoot. */
 export const PILOT_STICK_LEAN_13 = Math.sin(3 * RAD);
+/**
+ * 13 engines: the lean allowed fades gently to near upright (2 deg) as the fall slows from
+ * 120 to 60 m/s, and the lean command moves no faster than PILOT_SLEW_13. So the booster
+ * reaches the step-down speed upright and not rotating: 3 engines never inherit a lean that
+ * they then fly sideways on (the 13 -> 3 kick seen in the probe), and the gentle rate (vs.
+ * the fast c5d fade) leaves no rotation for 3 engines to stop.
+ */
+export const PILOT_FULL_LEAN_SPEED = 120;
+export const PILOT_UPRIGHT_SPEED = 60;
+export const PILOT_LEAN_UPRIGHT = Math.sin(2 * RAD);
+export const PILOT_SLEW_13 = 0.3; // rad/s
 /**
  * Pilot lean limit on 3 engines (15 deg; the tilt abort is 30 deg). Fixed shares: the stick
  * owns 45% (PILOT_MAX_LEAN), the velocity damping 55% (PILOT_DAMP_LEAN). The two never
@@ -42,21 +53,29 @@ export const PILOT_DAMP_LEAN = 0.55 * PILOT_LEAN_LIMIT_3;
  */
 export const PILOT_DAMP_TAU_3 = 3.0;
 /**
- * rad/s: the Pilot lean command on 3 engines moves no faster than this. With ~0.3-0.5 rad/s^2
- * of attitude authority, a faster command leaves a rotation the gimbal cannot stop in time
- * (the attitude overshoots); at 0.1 rad/s the overshoot stays within a few percent.
+ * rad/s: the Pilot lean command on 3 engines moves no faster than this (the autopilot's
+ * 3-engine slew). 0.1 rad/s was too slow: a lean carried over from 13 engines took ~3 s to
+ * take back, and at high 3-engine thrust the booster flew sideways on it meanwhile.
  */
-export const PILOT_SLEW_3 = 0.1;
+export const PILOT_SLEW_3 = 0.2;
 /**
- * Final approach (pins below PILOT_FINE_HEIGHT above the rails): the velocity hold tightens
- * to PILOT_HOLD_TAU and the stick gets a little finer (PILOT_FINE_LEAN), for positioning; a
- * centred stick nulls the sideways speed, like the real vehicle's hold. Full stick still
- * moves the booster ~2.4 m/s here: enough to close the last 2 m in a few seconds. (At 4 deg
- * and 1.8 s it was ~1.2 m/s, too slow: a steady player 2 m off at 28 m could not fix it.)
+ * Final approach: station-keeping. Below PILOT_FINE_HEIGHT (blended over the PILOT_FINE_BLEND m
+ * above it) the flight computer holds a lateral VELOCITY, as the real vehicle does: the stick
+ * commands at most PILOT_HOLD_SPEED (fading to PILOT_HOLD_SPEED_MIN at the rails, under the
+ * 1 m/s contact limit), the hold tracks it with time constant PILOT_HOLD_TAU, and its lean is
+ * capped at PILOT_HOLD_LEAN (fading to PILOT_HOLD_LEAN_MIN at the rails, under the 2 deg
+ * contact limit). So a hand-flown final approach cannot arrive sliding or tilted.
+ * The c5f "more authority, softer 2.2 s hold" did the opposite and oscillated.
  */
 export const PILOT_FINE_HEIGHT = 30;
-export const PILOT_HOLD_TAU = 2.2;
-export const PILOT_FINE_LEAN = Math.sin(6 * RAD);
+export const PILOT_FINE_BLEND = 10;
+export const PILOT_HOLD_TAU = 1.1;
+export const PILOT_HOLD_SPEED = 1.5;
+export const PILOT_HOLD_SPEED_MIN = 0.6;
+export const PILOT_HOLD_LEAN = Math.sin(6 * RAD);
+export const PILOT_HOLD_LEAN_MIN = Math.sin(1.5 * RAD);
+/** m of pin height over which the hold's speed and lean caps fade to their minimum. */
+export const PILOT_HOLD_FADE = 15;
 /** rad: above this tilt on 3 engines, attitude has priority: the stick is ignored until upright. */
 export const PILOT_RIGHTING_TILT = 20 * RAD;
 /** rad/s of tilt rate at full stick while coasting (no thrust: the fins hold the attitude). */
@@ -71,11 +90,13 @@ export const leverToThrottle = (lever: number): number =>
  *  actual thrust) plus a small stick bias. Before this, a damping law with a long time
  *  constant braked too little: a booster that stepped down on time still slid ~20 m/s
  *  toward the tower, and 3 engines could not stop it before it passed the arms.
+ *  The allowed lean fades to near upright as the fall slows toward step-down speed.
  *  (Once the player asks for the step-down, commandFor arrests the rotation instead.)
- *  3 engines: the stick sets a lean (attitude command, its fixed share of the limit) and a
- *  damping lean (the other share) opposes the lateral velocity, so a hands-off booster stops
- *  sliding. In the final approach the hold tightens and the stick gets finer. A large tilt
- *  locks the stick out until upright. The sum never exceeds 15 deg (the abort is 30 deg).
+ *  3 engines, cruise: the stick sets a lean (attitude command, its fixed share of the limit)
+ *  and a damping lean (the other share) opposes the slide, so a hands-off booster stops.
+ *  3 engines, final approach: station-keeping on a stick-commanded lateral velocity (see
+ *  PILOT_HOLD_*). A large tilt locks the stick out until upright. The lean never exceeds
+ *  15 deg (the abort is 30 deg); near the rails it stays under the 2 deg contact limit.
  */
 export function pilotLean(w: World, stick: Vec2): Vec2 {
   // Lean -> lateral accel is (thrust / m) * lean; never below g, so a spooling engine set
@@ -88,15 +109,32 @@ export function pilotLean(w: World, stick: Vec2): Vec2 {
       x: (g ? g.x / aT : 0) + s.x * PILOT_STICK_LEAN_13,
       z: (g ? g.z / aT : 0) + s.z * PILOT_STICK_LEAN_13,
     };
-    return clampLen2(target, PILOT_LEAN_LIMIT_13);
+    const k = clamp((-w.vel.y - PILOT_UPRIGHT_SPEED) / (PILOT_FULL_LEAN_SPEED - PILOT_UPRIGHT_SPEED), 0, 1);
+    return clampLen2(target, PILOT_LEAN_UPRIGHT + (PILOT_LEAN_LIMIT_13 - PILOT_LEAN_UPRIGHT) * k);
   }
   if (tiltAngle(w.tilt) > PILOT_RIGHTING_TILT) s = { x: 0, z: 0 };
-  const fine = clamp(pinHeightAboveRails(w.pos, w.tilt) / PILOT_FINE_HEIGHT, 0, 1);
-  const lean = PILOT_FINE_LEAN + (PILOT_MAX_LEAN - PILOT_FINE_LEAN) * fine;
-  const tau = PILOT_HOLD_TAU + (PILOT_DAMP_TAU_3 - PILOT_HOLD_TAU) * fine;
-  // Fixed shares: the stick's effect does not depend on how hard the damping is braking.
-  const damp = clampLen2({ x: -w.vel.x / (tau * aT), z: -w.vel.z / (tau * aT) }, PILOT_DAMP_LEAN);
-  return { x: s.x * lean + damp.x, z: s.z * lean + damp.z };
+  // Damp the centre of percussion's velocity, not the CoM's (as the autopilot does): the
+  // gimbal side force moves the CoM the wrong way first, and a velocity hold on the CoM
+  // chases that (a right-half-plane zero near 1 rad/s), which makes a firm hold oscillate.
+  const vx = w.vel.x + COP_ABOVE_COM * w.tiltRate.x;
+  const vz = w.vel.z + COP_ABOVE_COM * w.tiltRate.z;
+  const hp = pinHeightAboveRails(w.pos, w.tilt);
+
+  // Cruise: the stick sets a lean (its fixed share); the damping lean (the rest) slows the slide.
+  const damp = clampLen2({ x: -vx / (PILOT_DAMP_TAU_3 * aT), z: -vz / (PILOT_DAMP_TAU_3 * aT) }, PILOT_DAMP_LEAN);
+  const cruise = { x: s.x * PILOT_MAX_LEAN + damp.x, z: s.z * PILOT_MAX_LEAN + damp.z };
+
+  // Final approach: station-keeping on a stick-commanded lateral velocity.
+  const near = clamp(hp / PILOT_HOLD_FADE, 0, 1);
+  const vMax = PILOT_HOLD_SPEED_MIN + (PILOT_HOLD_SPEED - PILOT_HOLD_SPEED_MIN) * near;
+  const holdLean = PILOT_HOLD_LEAN_MIN + (PILOT_HOLD_LEAN - PILOT_HOLD_LEAN_MIN) * near;
+  const hold = clampLen2(
+    { x: (s.x * vMax - vx) / (PILOT_HOLD_TAU * aT), z: (s.z * vMax - vz) / (PILOT_HOLD_TAU * aT) },
+    holdLean,
+  );
+
+  const b = clamp((hp - PILOT_FINE_HEIGHT) / PILOT_FINE_BLEND, 0, 1); // 1 = cruise, 0 = hold
+  return { x: b * cruise.x + (1 - b) * hold.x, z: b * cruise.z + (1 - b) * hold.z };
 }
 
 export function commandFor(w: World, input: PilotInput, autopilot: boolean): FlightCommand {
@@ -141,6 +179,11 @@ export function commandFor(w: World, input: PilotInput, autopilot: boolean): Fli
         return { attitude: 'rate', target: { x: 0, z: 0 }, ...common };
       }
       let target = pilotLean(w, stick);
+      if (w.phase === 'burn13') {
+        // A gentle lean command on 13 engines too: no rotation is left at the step-down.
+        const step = clampLen2({ x: target.x - w.tiltCmd.x, z: target.z - w.tiltCmd.z }, PILOT_SLEW_13 * DT);
+        target = { x: w.tiltCmd.x + step.x, z: w.tiltCmd.z + step.z };
+      }
       if (w.phase === 'burn3') {
         // 3 engines have little attitude authority: a slow lean command, so it never overshoots.
         const step = clampLen2({ x: target.x - w.tiltCmd.x, z: target.z - w.tiltCmd.z }, PILOT_SLEW_3 * DT);
