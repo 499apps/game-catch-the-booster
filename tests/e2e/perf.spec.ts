@@ -10,11 +10,27 @@ import { openGame, skipWithoutWebGL, startTier, state } from './helpers';
  */
 const FPS_TARGET = 50;
 // SwiftShader at High (bloom + 2048 shadows) measured ~2 fps on this host before Auto
-// stepped down, so the floor only proves the loop is alive; the real check is the tier drop.
-const FPS_HEADLESS_MIN = 1;
+// stepped down (under 1 fps with the C2 dusk shaders and parallel workers), so the floor only
+// proves the loop is alive; the real check is the tier drop.
+const FPS_HEADLESS_MIN = 0.25;
+
+/** Low tier: the whole frame (every pass) stays under this many draw calls. */
+const LOW_DRAW_CALLS_MAX = 150;
+
+test('Low quality stays under the draw-call budget in flight', async ({ page, browserName }, info) => {
+  test.skip(info.project.name !== 'chromium', 'Draw calls are counted on desktop Chromium only.');
+  const s = await openGame(page, 'still=1&tier=cadet&seed=1&at=12');
+  skipWithoutWebGL(s, browserName);
+  expect(s.quality).toBe('low');
+  info.annotations.push({ type: 'drawCalls', description: String(s.drawCalls) });
+  expect(s.drawCalls).toBeGreaterThan(5);
+  expect(s.drawCalls).toBeLessThan(LOW_DRAW_CALLS_MAX);
+});
 
 test('fps budget and adaptive quality at Auto', async ({ page, browserName }, info) => {
   test.skip(info.project.name !== 'chromium', 'The frame budget is measured on desktop Chromium only.');
+  // Starts at Auto (High on a desktop), which SwiftShader renders at ~2 fps until Auto steps down.
+  test.slow();
   const s0 = await openGame(page, 'test=1&seed=8&quality=auto');
   skipWithoutWebGL(s0, browserName);
   expect(s0.qualitySetting).toBe('auto');

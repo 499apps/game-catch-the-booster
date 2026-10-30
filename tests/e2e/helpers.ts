@@ -19,6 +19,7 @@ export interface CatchState {
   camera: string;
   paused: boolean;
   replay: boolean;
+  drawCalls: number;
 }
 
 /** Collects console errors and uncaught page errors. */
@@ -46,7 +47,7 @@ export async function state(page: Page): Promise<CatchState> {
  * not the frame budget (perf.spec.ts measures Auto on its own).
  */
 export async function openGame(page: Page, query = 'test=1'): Promise<CatchState> {
-  const q = /(^|&)(quality|still)=/.test(query) ? query : `${query}&quality=low`;
+  const q = /(^|&)(quality|still)=/.test(query) ? query : `${query}&quality=low&scale=0.5`;
   await page.goto(`./?${q}`);
   await page.waitForFunction(
     () => {
@@ -54,7 +55,7 @@ export async function openGame(page: Page, query = 'test=1'): Promise<CatchState
       return !!s && s.ready;
     },
     undefined,
-    { timeout: 20_000 },
+    { timeout: 40_000 },
   );
   return state(page);
 }

@@ -1,4 +1,5 @@
 // One positive, specific tip per outcome (kid-safe wording).
+import type { Medal } from './scoring';
 import type { FailReason } from './types';
 
 export const TIPS: Record<FailReason, string> = {
@@ -16,6 +17,15 @@ export const TIPS: Record<FailReason, string> = {
   timeout: 'Keep the booster moving down toward the arms. You cannot hover forever!',
 };
 
-export function tipFor(reason: FailReason | null): string {
-  return reason ? TIPS[reason] : 'Beautiful catch! Try for a Bullseye: pins within 0.3 m.';
+/** Catch tips depend on the medal, so a Bullseye never hears "try for a Bullseye". */
+export const CATCH_TIPS: Record<Medal, string> = {
+  bullseye: 'Bullseye! Pins dead centre and a soft touch. Try Flight Director next for engine-outs and gusts.',
+  gold: 'Gold catch! For a Bullseye, line the pins up within 0.3 m of the arm centre.',
+  silver: 'Silver catch! Touch down slower: add a little throttle in the last 20 m for more points.',
+  bronze: 'Nice catch! Keep the booster upright and stop sliding sideways before the arms close.',
+  none: 'Caught! Light the engines on the marker and line up with the ring for a medal.',
+};
+
+export function tipFor(reason: FailReason | null, medal: Medal = 'none'): string {
+  return reason ? TIPS[reason] : CATCH_TIPS[medal];
 }

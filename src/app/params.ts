@@ -19,6 +19,8 @@ export interface Hooks {
   fps: boolean;
   /** Force a quality setting (tests use Low on software-rendered browsers). */
   quality: QualitySetting | null;
+  /** Test-only render scale (0.25 to 1) on top of the quality pixel ratio; keeps software-GL e2e responsive. */
+  scale: number;
 }
 
 const QUALITY_IDS: readonly string[] = ['auto', 'low', 'medium', 'high'];
@@ -33,7 +35,7 @@ function num(v: string | null): number | null {
 
 export function parseHooks(search: string): Hooks {
   const p = new URLSearchParams(search);
-  const keys = ['autopilot', 'timescale', 'still', 'seed', 'tier', 'at', 'debrief', 'fps', 'test', 'quality'];
+  const keys = ['autopilot', 'timescale', 'still', 'seed', 'tier', 'at', 'debrief', 'fps', 'test', 'quality', 'scale'];
   const q = p.get('quality');
   const active = keys.some((k) => p.has(k));
   const tierRaw = p.get('tier');
@@ -49,5 +51,6 @@ export function parseHooks(search: string): Hooks {
     debrief: p.get('debrief') === '1',
     fps: p.get('fps') === '1' || active,
     quality: q && QUALITY_IDS.includes(q) ? (q as QualitySetting) : null,
+    scale: Math.min(Math.max(num(p.get('scale')) ?? 1, 0.25), 1),
   };
 }

@@ -39,8 +39,10 @@ export default defineConfig({
     baseURL: BASE,
     trace: 'off',
     serviceWorkers: 'allow',
-    navigationTimeout: 20_000,
-    actionTimeout: 10_000,
+    // Software WebGL under parallel load can stall a page for seconds per frame (C2 shaders):
+    // generous action/navigation timeouts avoid false failures without hiding real hangs.
+    navigationTimeout: 40_000,
+    actionTimeout: 20_000,
   },
   webServer: {
     command: 'pnpm exec vite preview --port 4173 --strictPort',

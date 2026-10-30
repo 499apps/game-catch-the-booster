@@ -201,46 +201,135 @@ button {
 #hud.hidden {
   display: none;
 }
+/* Webcast strip: a dark glass band along the bottom (top on touch screens). */
 #telemetry {
   position: absolute;
-  top: calc(var(--st) + 10px);
-  left: calc(var(--sl) + 68px);
+  bottom: calc(var(--sb) + 10px);
+  left: calc(var(--sl) + 10px);
   right: calc(var(--sr) + 10px);
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
+  gap: 4px 18px;
   align-items: center;
-  padding: 7px 12px;
-  border-radius: 10px;
-  background: rgba(8, 16, 26, 0.72);
-  border: 1px solid var(--line);
+  padding: 8px 16px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(14, 24, 36, 0.82), rgba(6, 12, 20, 0.9));
+  border: 1px solid rgba(160, 190, 215, 0.22);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(4px);
+}
+#telemetry .brand {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  padding-right: 14px;
+  border-right: 1px solid var(--line);
+}
+#telemetry .brand b {
+  font-size: 15px;
+  letter-spacing: 0.18em;
+}
+#telemetry .mission {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+}
+#telemetry .cell {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+  min-width: 0;
+}
+#telemetry .cell .row {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+#telemetry .cell.small {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 1px 6px;
+  align-items: baseline;
 }
 #telemetry .k {
   color: var(--dim);
   font-size: 10px;
-  letter-spacing: 0.12em;
-  margin-right: 4px;
+  letter-spacing: 0.16em;
 }
 #telemetry .v {
+  font-weight: 800;
+  font-size: 20px;
+}
+#telemetry .v.sm {
+  font-size: 12px;
   font-weight: 700;
 }
+#telemetry .u {
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+#telemetry .time {
+  margin-left: auto;
+  align-items: flex-end;
+}
+#telemetry .clock {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+#telemetry .bar {
+  display: inline-block;
+  width: 80px;
+  height: 7px;
+  border-radius: 4px;
+  background: #22303e;
+  overflow: hidden;
+  align-self: center;
+}
+#telemetry .bar i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #4fd1ff, #5fffd0);
+}
+#telemetry .bar i.low {
+  background: var(--warn);
+}
 #engine-ring {
-  width: 30px;
-  height: 30px;
+  width: 48px;
+  height: 48px;
+  flex: none;
+}
+#engine-ring .rim {
+  fill: rgba(10, 18, 28, 0.9);
+  stroke: rgba(160, 190, 215, 0.45);
+  stroke-width: 0.18;
 }
 #engine-ring circle {
   fill: #2a3542;
   stroke: #556677;
-  stroke-width: 0.6;
+  stroke-width: 0.12;
+}
+#engine-ring circle.outer {
+  fill: #1c2632;
+  stroke: #3a4756;
 }
 #engine-ring circle.on {
-  fill: #ffbe6b;
-  stroke: #fff2d9;
+  fill: #ffcf86;
+  stroke: #fff5e0;
+}
+#engine-ring circle.spool {
+  fill: #a8763f;
 }
 #engine-ring circle.fail {
   fill: #6b3a3a;
+}
+#engine-ring .count {
+  fill: #0d1b2a;
+  font-size: 1.5px;
+  font-weight: 800;
 }
 #stop-gauge {
   display: inline-block;
@@ -249,7 +338,7 @@ button {
   border-radius: 4px;
   background: #22303e;
   position: relative;
-  vertical-align: middle;
+  align-self: center;
 }
 #stop-gauge i {
   position: absolute;
@@ -270,7 +359,7 @@ button {
 }
 #gonogo {
   position: absolute;
-  top: calc(var(--st) + 64px);
+  top: calc(var(--st) + 14px);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -324,7 +413,7 @@ button {
 #captions {
   position: absolute;
   left: 50%;
-  bottom: calc(var(--sb) + 150px);
+  bottom: calc(var(--sb) + 96px);
   transform: translateX(-50%);
   max-width: min(80vw, 620px);
   text-align: center;
@@ -340,19 +429,63 @@ button {
 }
 #camera-tag {
   position: absolute;
-  left: calc(var(--sl) + 12px);
-  bottom: calc(var(--sb) + 10px);
+  left: calc(var(--sl) + 66px);
+  top: calc(var(--st) + 24px);
   font-size: 11px;
   letter-spacing: 0.14em;
-  color: var(--dim);
+  color: var(--ink);
   text-transform: uppercase;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+#camera-tag::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: #ff5a4f;
+  box-shadow: 0 0 6px #ff5a4f;
+}
+/* Picture-in-picture: the canvas draws the inset shot inside this frame. */
+#pip {
+  position: absolute;
+  top: calc(var(--st) + 12px);
+  right: calc(var(--sr) + 12px);
+  width: clamp(150px, 24vw, 320px);
+  aspect-ratio: 16 / 9;
+  border: 2px solid rgba(232, 238, 244, 0.85);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  box-sizing: border-box;
+}
+#pip[hidden] {
+  display: none;
+}
+#pip span {
+  position: absolute;
+  left: 6px;
+  bottom: 4px;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 2px #000;
 }
 #fps {
   position: absolute;
-  right: calc(var(--sr) + 10px);
-  bottom: calc(var(--sb) + 8px);
+  right: calc(var(--sr) + 14px);
+  bottom: calc(var(--sb) + 84px);
   font-size: 11px;
   color: var(--dim);
+}
+/* Soft lens vignette on every quality tier (cheap: CSS, not a GPU pass). */
+#app::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 45%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.32) 100%);
 }
 .action {
   position: absolute;
@@ -370,7 +503,7 @@ button {
 }
 #catch-btn {
   right: calc(var(--sr) + 96px);
-  bottom: calc(var(--sb) + 28px);
+  bottom: calc(var(--sb) + 96px);
   width: 128px;
   height: 128px;
   font-size: 22px;
@@ -395,7 +528,7 @@ button {
 #light-btn {
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(var(--sb) + 40px);
+  bottom: calc(var(--sb) + 140px);
   padding: 14px 26px;
   font-size: 18px;
   color: var(--warn);
@@ -403,7 +536,7 @@ button {
 }
 #step-btn {
   right: calc(var(--sr) + 96px);
-  bottom: calc(var(--sb) + 170px);
+  bottom: calc(var(--sb) + 240px);
   padding: 10px 16px;
   font-size: 14px;
 }
@@ -418,10 +551,11 @@ button {
 }
 
 /* ---------- Touch controls ---------- */
+/* Only while flying: never on the main menu, the pause screen or the debrief. */
 #touch {
   display: none;
 }
-.touch #touch {
+.touch.flying #touch {
   display: block;
 }
 #stick {
@@ -469,11 +603,55 @@ button {
 }
 #throttle span {
   position: absolute;
-  top: -20px;
-  width: 100%;
-  text-align: center;
-  font-size: 10px;
-  color: var(--dim);
+  top: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(6, 12, 20, 0.85);
+  border: 1px solid rgba(255, 190, 107, 0.6);
+  color: #ffd9a6;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-shadow: 0 1px 2px #000;
+}
+/* Touch screens: the webcast strip moves to the top so the thumbs own the bottom corners. */
+.touch #telemetry {
+  bottom: auto;
+  top: calc(var(--st) + 8px);
+  left: calc(var(--sl) + 64px);
+}
+.touch #gonogo {
+  top: calc(var(--st) + 84px);
+}
+.touch #camera-tag {
+  top: auto;
+  bottom: calc(var(--sb) + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.touch #pip {
+  top: calc(var(--st) + 120px);
+}
+.touch #catch-btn {
+  bottom: calc(var(--sb) + 28px);
+}
+.touch #light-btn {
+  bottom: calc(var(--sb) + 40px);
+}
+.touch #step-btn {
+  bottom: calc(var(--sb) + 170px);
+}
+.touch #captions {
+  bottom: calc(var(--sb) + 196px);
+}
+.touch #fps {
+  bottom: auto;
+  top: calc(var(--st) + 120px);
+  left: calc(var(--sl) + 12px);
+  right: auto;
 }
 
 /* ---------- Notices ---------- */
@@ -494,14 +672,41 @@ button {
   }
   #telemetry {
     font-size: 11px;
-    gap: 2px 10px;
-    padding: 5px 8px;
+    gap: 3px 10px;
+    padding: 5px 9px;
+  }
+  #telemetry .v {
+    font-size: 15px;
+  }
+  #telemetry .clock {
+    font-size: 17px;
+  }
+  #telemetry .brand {
+    padding-right: 8px;
+  }
+  #telemetry .brand b {
+    font-size: 12px;
+  }
+  #telemetry .cell.small,
+  #stop-gauge,
+  #telemetry .bar {
+    display: none;
+  }
+  #engine-ring {
+    width: 36px;
+    height: 36px;
   }
   #gonogo {
-    top: calc(var(--st) + 86px);
+    top: calc(var(--st) + 96px);
     flex-wrap: wrap;
     justify-content: center;
     width: 92vw;
+  }
+  #pip {
+    width: clamp(120px, 34vw, 220px);
+  }
+  .touch #pip {
+    top: calc(var(--st) + 150px);
   }
   #catch-btn {
     width: 104px;
@@ -516,7 +721,11 @@ button {
 }
 @media (max-height: 520px) and (orientation: landscape) {
   #gonogo {
-    top: calc(var(--st) + 52px);
+    top: calc(var(--st) + 62px);
+  }
+  .touch #pip {
+    top: calc(var(--st) + 62px);
+    width: clamp(120px, 22vw, 200px);
   }
   #captions {
     bottom: calc(var(--sb) + 20px);

@@ -72,6 +72,7 @@ export interface CatchTestState {
   camera: CameraId;
   paused: boolean;
   replay: boolean;
+  drawCalls: number;
 }
 
 declare global {
@@ -106,6 +107,7 @@ export class Game {
   private readonly director = new AutoDirector();
   private manualCam: CameraId | null = null;
   private camera: CameraId = 'wide';
+  private lastCamera: CameraId = 'wide';
   private run: Run | null = null;
   private lastLog: { log: InputLog; seed: number; tier: TierId; autopilot: boolean } | null = null;
   private paused = false;
@@ -134,7 +136,7 @@ export class Game {
     const canvas = el('canvas', { id: 'game-canvas', 'data-testid': 'game-canvas' });
     app.append(canvas);
     try {
-      if (hasWebGL2()) this.view = new View(canvas, this.quality.profile, { preserveDrawingBuffer: hooks.active });
+      if (hasWebGL2()) this.view = new View(canvas, this.quality.profile, { preserveDrawingBuffer: hooks.active, scale: hooks.scale });
     } catch {
       this.view = null;
     }
@@ -168,6 +170,10 @@ export class Game {
         const i = CAMERA_IDS.indexOf(this.camera);
         this.pickCamera(CAMERA_IDS[(i + 1) % CAMERA_IDS.length] ?? 'wide');
       } else if (k === 'cameraAuto') this.pickCamera('auto');
+      else {
+        const id = CAMERA_IDS[Number(k.slice(3)) - 1];
+        if (id) this.pickCamera(id);
+      }
     });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && this.run && !this.run.world.done && !this.paused && !hooks.still) this.setPaused(true);
@@ -234,6 +240,7 @@ export class Game {
       camera: this.camera,
       paused: false,
       replay: false,
+      drawCalls: 0,
     };
   }
 
@@ -492,7 +499,7 @@ export class Game {
       tier: r.tier,
       caught,
       title: caught ? 'Caught by the arms!' : goodCall ? 'Good Call: safe splashdown' : 'Soft splashdown',
-      tip: tipFor(w.outcome?.reason ?? null),
+      tip: tipFor(w.outcome?.reason ?? null, score.medal),
       score,
       best: loadBest(r.tier),
       newBest,
@@ -553,6 +560,8 @@ export class Game {
     }
     const frame: FrameState = {
       t,
+      simT: w.t,
+      railCompression: w.rails.compression,
       pos,
       tilt: w.tilt,
       roll: w.roll,
@@ -582,12 +591,21 @@ export class Game {
       this.camera = this.manualCam ?? auto;
     } else if (!this.manualCam) this.camera = 'wide';
     this.menu.setCamera(this.camera, this.manualCam === null);
+    const flying = !!r && !r.world.done;
+    if (flying !== this.app.classList.contains('flying')) this.app.classList.toggle('flying', flying);
 
     const t = this.hooks.still ? 0 : r ? w.t : this.realTime;
     const { frame, shot } = this.buildFrame(w, t, !!r);
     if (this.view) {
-      this.view.render(frame, this.camera, shot, dt, snap);
-      if (!snap) this.view.trackAll(shot, dt, this.camera);
+      // A cut restarts the beach lens focus pull.
+      if (this.camera !== this.lastCamera && !snap) this.view.rigs[this.camera].cut();
+      this.lastCamera = this.camera;
+      // Picture-in-picture: only with post-processing tiers (keeps Low under its draw-call budget).
+      const pipCam = r && flying && this.view.hasPost && !this.hooks.still ? AutoDirector.pip(this.camera, w.phase, tauOf(w)) : null;
+      this.hud.setPip(pipCam ? CAMERA_LABELS[pipCam] : null);
+      const rect = pipCam ? this.hud.pipRect(this.app) : null;
+      this.view.render(frame, this.camera, shot, dt, snap, pipCam && rect ? { cam: pipCam, rect } : null);
+      if (!snap) this.view.trackAll(shot, dt, pipCam ? [this.camera, pipCam] : [this.camera]);
     }
     if (r) {
       const camPos = this.camPos(this.camera, w);
@@ -659,6 +677,7 @@ export class Game {
     s.camera = this.camera;
     s.paused = this.paused;
     s.replay = !!r?.player;
+    s.drawCalls = this.view?.drawCalls ?? 0;
   }
 
   private resize(): void {

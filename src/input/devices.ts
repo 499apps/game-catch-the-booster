@@ -15,7 +15,9 @@ import type { PilotInput } from '../sim/types';
 /** Keys the game uses, so the browser does not scroll or tab on them. */
 const GAME_KEYS = new Set(['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab']);
 
-export type UiKey = 'pause' | 'camera' | 'cameraAuto';
+/** 'cam1'..'cam5' pick a camera directly (Numpad 1-5: the digit row sets the throttle). */
+export type UiKey = 'pause' | 'camera' | 'cameraAuto' | 'cam1' | 'cam2' | 'cam3' | 'cam4' | 'cam5';
+const CAM_KEYS: Record<string, UiKey> = { Numpad1: 'cam1', Numpad2: 'cam2', Numpad3: 'cam3', Numpad4: 'cam4', Numpad5: 'cam5' };
 
 interface Haptics {
   playEffect?: (
@@ -78,6 +80,8 @@ export class InputDevices {
       if (e.code === 'Escape' || e.code === 'KeyP') this.emitUi('pause');
       if (e.code === 'KeyC') this.emitUi('camera');
       if (e.code === 'KeyV') this.emitUi('cameraAuto');
+      const cam = CAM_KEYS[e.code];
+      if (cam) this.emitUi(cam);
     }
     this.held.add(e.code);
     this.tapped.add(e.code);

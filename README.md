@@ -47,7 +47,7 @@ The first e2e run has no screenshot baselines. Make them once with `pnpm exec pl
 | Step down 13 to 3 | R | RB | 13 → 3 button |
 | Close the arms | Space | A | CATCH button (hold 0.3 s) |
 | GO / NO-GO (Flight Director) | Enter / hold X for 1 s | Start / hold B | GO / hold NO-GO |
-| Camera | C (next), V (auto) | Y or D-pad | Cameras list in the menu |
+| Camera | C (next), V (auto), Numpad 1–5 (pick; the digit row sets the throttle) | Y or D-pad | Cameras list in the menu |
 | Pause and menu | Esc or P | View / Back | ☰ button (left edge) |
 
 ## Test hooks
