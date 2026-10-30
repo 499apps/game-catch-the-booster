@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import {
   BONUS_GOOD_CALL,
+  IGNITION_ZERO,
   MAX,
+  TIER_CONFIG,
   alignmentScore,
   contactSpeedScore,
   fuelError,
@@ -47,6 +49,15 @@ describe('score components', () => {
     expect(alignmentScore(3)).toBe(0);
     monotoneDecreasing(alignmentScore);
   });
+  it('alignment scales to the tier window: a Cadet catch inside its 3 m window always scores', () => {
+    const cadet = TIER_CONFIG.cadet.pinWindow;
+    expect(alignmentScore(0, cadet)).toBe(300);
+    expect(alignmentScore(1.5, cadet)).toBeCloseTo(150, 9);
+    expect(alignmentScore(2.9, cadet)).toBeGreaterThan(0);
+    expect(alignmentScore(cadet, cadet)).toBe(0);
+    expect(scoreRun({ ...perfect, pinError: 2, pinWindow: cadet }).alignment).toBe(100);
+    monotoneDecreasing((x) => alignmentScore(x, cadet));
+  });
   it('contact speed: full below 0.5, half at 2, zero at 4, monotonic', () => {
     expect(contactSpeedScore(0.5)).toBe(250);
     expect(contactSpeedScore(2)).toBeCloseTo(125, 9);
@@ -72,12 +83,20 @@ describe('score components', () => {
       }),
     );
   });
-  it('ignition: 100 at 0 m, 75 at 40 m ("pro"), 0 at 160 m', () => {
+  it('ignition: 100 at 0 m, ~93 at 40 m ("pro"), still ~50 a whole second (~300 m) off, 0 at 600 m', () => {
     expect(ignitionScore(0)).toBe(100);
-    expect(ignitionScore(40)).toBeCloseTo(75, 9);
-    expect(ignitionScore(-40)).toBeCloseTo(75, 9);
-    expect(ignitionScore(160)).toBe(0);
-    monotoneDecreasing(ignitionScore);
+    expect(ignitionScore(40)).toBeCloseTo(93.33, 1);
+    expect(ignitionScore(-40)).toBeCloseTo(93.33, 1);
+    expect(ignitionScore(300)).toBeCloseTo(50, 9);
+    expect(ignitionScore(-300)).toBeCloseTo(50, 9);
+    expect(ignitionScore(IGNITION_ZERO)).toBe(0);
+    expect(ignitionScore(900)).toBe(0);
+    fc.assert(
+      fc.property(fc.double({ min: 0, max: 1000, noNaN: true }), fc.double({ min: 0, max: 1000, noNaN: true }), (a, b) => {
+        const [lo, hi] = a <= b ? [a, b] : [b, a];
+        expect(ignitionScore(lo)).toBeGreaterThanOrEqual(ignitionScore(hi));
+      }),
+    );
   });
   it('stability: 50 when upright and still, 0 at 2 deg and 1 m/s', () => {
     expect(stabilityScore(0, 0)).toBe(50);

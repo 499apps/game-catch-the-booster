@@ -19,15 +19,28 @@ export function propellantNeeded(world: World, tau: number): number {
   return (1.1 * remaining * m * G0) / (ISP * G0);
 }
 
+/**
+ * m: the pins must be this close to the arm centreline at the poll. Reach is measured from
+ * the arms, not from the autopilot's hold point (X_HOLD offshore): a pilot who flies straight
+ * toward the tower, or a little past it, can still make the catch. The old check measured
+ * from the hold point, so a hand-flown booster near or past the tower was called NO-GO.
+ */
+export const TRACK_REACH = X_HOLD + 50;
+
+/** Which board items are red (for captions, tips and test reports). */
+export function failedChecks(b: HealthBoard): (keyof HealthBoard)[] {
+  return (Object.keys(b) as (keyof HealthBoard)[]).filter((k) => !b[k]);
+}
+
 export function healthChecks(world: World, tau: number): HealthBoard {
   const pinX = world.pos.x + PIN_ABOVE_COM * world.tilt.x;
   const pinZ = world.pos.z + PIN_ABOVE_COM * world.tilt.z;
-  const offTrack = Math.hypot(pinX - X_HOLD, pinZ);
+  const reach = Math.hypot(pinX, pinZ);
   return {
     engines: countRunning(world.engines) >= STEP_DOWN_KEEP,
     propellant: world.propellant >= propellantNeeded(world, tau),
-    // Within reach of the divert: the 10 s pendulum can absorb ~50 m of extra offset.
-    track: offTrack < 50 && -world.vel.y < 60 && world.pos.y > 150,
+    // Within reach of the arms, not falling too fast, not too low.
+    track: reach < TRACK_REACH && -world.vel.y < 60 && world.pos.y > 150,
     towerSensors: !world.faults.towerSensor,
     arms: true,
     comms: true,

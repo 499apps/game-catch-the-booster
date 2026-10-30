@@ -1,11 +1,17 @@
 // World creation and the fixed-step update (phases, events, catch logic).
+import { aeroForce } from './atmosphere';
 import {
   CONTACT_COM_Y,
+  DRY_MASS,
   DT,
   G0,
   RAD,
   RUN_TIMEOUT,
   SHORELINE_X,
+  STEP_FORCE_SPEED,
+  STEP_MAX_RATE,
+  STEP_MAX_TILT,
+  STEP_MAX_WAIT,
 } from './constants';
 import { integrate, massOf } from './dynamics';
 import { countRunning, ignite, makeEngines, pickFailures, shutdownAll, stepDown, updateEngines } from './engines';
@@ -28,26 +34,65 @@ import { tierConfig, type TierId } from './tiers';
 import { makeArms, makeRails, staticCompression, startClose, updateArms, updateRails } from './tower';
 import type { FailReason, FlightCommand, HealthBoard, Phase, SimEvent, World } from './types';
 import { makeWind, meanWindSpeed, updateWind } from './wind';
-import { len2, tiltAngle } from './vec';
+import { clampLen2, len2, tiltAngle, type Vec3 } from './vec';
+import { CADET_AIM_FREEZE, CADET_AIM_RATE, cadetAimLimit, cadetAimOffset } from './autopilot';
 
 export interface WorldOptions {
   noAero?: boolean;
 }
 
 export const PROMPT_LEAD = 1.5; // s: the CATCH prompt shows at predicted contact <= arm close time + this
+/**
+ * s of extra coast before the old start point: room for a 3-2-1 ignition countdown in
+ * every tier. The start state is flown backward from the old one, so the booster still
+ * passes that point (and lights at the same state) about PREROLL seconds into the run.
+ */
+export const PREROLL = 3;
+
+/** Flies a ballistic coast (gravity + axial drag, retrograde, no wind) backward by `seconds`. */
+export function coastBackward(pos: Vec3, vel: Vec3, mass: number, seconds: number): { pos: Vec3; vel: Vec3 } {
+  const p = { ...pos };
+  const v = { ...vel };
+  const h = 1 / 60;
+  const f: Vec3 = { x: 0, y: 0, z: 0 };
+  const accel = (vv: Vec3, y: number): Vec3 => {
+    const s = Math.hypot(vv.x, vv.y, vv.z) || 1;
+    aeroForce(y, vv, { x: -vv.x / s, y: -vv.y / s, z: -vv.z / s }, f);
+    return { x: f.x / mass, y: f.y / mass - G0, z: f.z / mass };
+  };
+  for (let i = 0; i < Math.round(seconds / h); i++) {
+    // Midpoint (RK2) step with dt = -h.
+    const a1 = accel(v, p.y);
+    const vm = { x: v.x - 0.5 * h * a1.x, y: v.y - 0.5 * h * a1.y, z: v.z - 0.5 * h * a1.z };
+    const a2 = accel(vm, p.y - 0.5 * h * v.y);
+    p.x -= h * vm.x;
+    p.y -= h * vm.y;
+    p.z -= h * vm.z;
+    v.x -= h * a2.x;
+    v.y -= h * a2.y;
+    v.z -= h * a2.z;
+  }
+  return { pos: p, vel: v };
+}
 
 export function createWorld(seed: number, tier: TierId, opts: WorldOptions = {}): World {
   const cfg = tierConfig(tier);
   const init = makeRng(seed, 0);
-  const vy = -(300 + range(init, -4, 4));
-  const vx = -(115 + range(init, -5, 5));
-  const vz = range(init, -2, 2);
-  const speed = Math.hypot(vx, vy, vz);
+  const vy0 = -(300 + range(init, -4, 4));
+  const vx0 = -(115 + range(init, -5, 5));
+  const vz0 = range(init, -2, 2);
   // Plan the start offset so the 13-engine burn ends near X_STEPDOWN: ~1.1 s of coast
   // before ignition, with drag taking ~6% off the horizontal speed.
-  const vxIgn = 0.94 * vx;
+  const vxIgn = 0.94 * vx0;
   const xIgn = X_STEPDOWN - lateralAEnd(0, vxIgn, VX_STEPDOWN);
-  const xStart = xIgn - 1.1 * 0.97 * vx + range(init, -8, 8);
+  const xStart = xIgn - 1.1 * 0.97 * vx0 + range(init, -8, 8);
+  const y0 = 1640 + range(init, -20, 20);
+  const z0 = range(init, -12, 12);
+  const propellant = range(init, cfg.propellant[0], cfg.propellant[1]);
+  // The ignition countdown: start higher, on the same coast, PREROLL seconds earlier.
+  const back = coastBackward({ x: xStart, y: y0, z: z0 }, { x: vx0, y: vy0, z: vz0 }, DRY_MASS + propellant, PREROLL);
+  const { x: vx, y: vy, z: vz } = back.vel;
+  const speed = Math.hypot(vx, vy, vz);
   const w: World = {
     seed,
     tier,
@@ -55,7 +100,7 @@ export function createWorld(seed: number, tier: TierId, opts: WorldOptions = {})
     step: 0,
     t: 0,
     phase: 'coast',
-    pos: { x: xStart, y: 1640 + range(init, -20, 20), z: range(init, -12, 12) },
+    pos: back.pos,
     vel: { x: vx, y: vy, z: vz },
     // Flying engines-first: the nose points back along the trajectory (retrograde).
     tilt: { x: -vx / speed, z: -vz / speed },
@@ -64,7 +109,7 @@ export function createWorld(seed: number, tier: TierId, opts: WorldOptions = {})
     tiltCmdRate: { x: 0, z: 0 },
     roll: 0,
     rollRate: 0,
-    propellant: range(init, cfg.propellant[0], cfg.propellant[1]),
+    propellant,
     engines: makeEngines(),
     gimbal: { x: 0, z: 0 },
     fin: { x: 0, z: 0 },
@@ -76,7 +121,9 @@ export function createWorld(seed: number, tier: TierId, opts: WorldOptions = {})
     faults: { towerSensor: false },
     ignition: null,
     tStepDown: null,
+    stepArmedAt: null,
     flags: { divert: false, counterBurn: false, hover: false, catchPrompt: false },
+    aim: cfg.control === 'cadet' ? cadetAimOffset(seed) : { x: 0, z: 0 },
     contact: null,
     outcome: null,
     events: [],
@@ -112,6 +159,14 @@ function finish(w: World, caught: boolean, reason: FailReason | null, goodCall =
   else emit(w, 'splashdown', { reason: reason ?? 'unknown', goodCall, offshore: w.pos.x > SHORELINE_X });
 }
 
+function doStepDown(w: World): void {
+  const kept = stepDown(w.engines);
+  w.phase = 'burn3';
+  w.tStepDown = w.t;
+  w.stepArmedAt = null;
+  emit(w, 'stepDown', { engines: kept.length });
+}
+
 function handleCommands(w: World, cmd: FlightCommand): void {
   if (cmd.ignite && w.phase === 'coast') {
     const failed = pickFailures(w.rngEvents, w.cfg.ignitionFailures);
@@ -125,11 +180,13 @@ function handleCommands(w: World, cmd: FlightCommand): void {
     };
     emit(w, 'ignition', { engines: 13 - failed.length });
   }
-  if (cmd.stepDown && w.phase === 'burn13') {
-    const kept = stepDown(w.engines);
-    w.phase = 'burn3';
-    w.tStepDown = w.t;
-    emit(w, 'stepDown', { engines: kept.length });
+  // Autopilot and Flight Director step down at once; the Pilot's request arms the interlock.
+  if (cmd.stepDown && w.phase === 'burn13') doStepDown(w);
+  if (cmd.stepArm && w.phase === 'burn13' && w.stepArmedAt === null) w.stepArmedAt = w.t;
+  if (w.stepArmedAt !== null && w.phase === 'burn13') {
+    const settled = tiltAngle(w.tilt) < STEP_MAX_TILT && len2(w.tiltRate) < STEP_MAX_RATE;
+    const waited = w.t - w.stepArmedAt >= STEP_MAX_WAIT;
+    if (settled || waited || -w.vel.y < STEP_FORCE_SPEED) doStepDown(w);
   }
   const g = w.gonogo;
   if (g.polled && g.decision === 'pending' && !w.cfg.autoGoNoGo && (cmd.go || cmd.noGo)) {
@@ -142,6 +199,19 @@ function handleCommands(w: World, cmd: FlightCommand): void {
   if (cmd.closeArms && (w.phase === 'burn3' || w.phase === 'burn13') && startClose(w.arms, w.t)) {
     emit(w, 'armsCloseStart', { pinHeight: pinHeightAboveRails(w.pos, w.tilt) });
   }
+}
+
+/**
+ * Cadet: the stick moves the divert aim point at up to CADET_AIM_RATE, never more than
+ * pinWindow - CADET_AIM_MARGIN from the centre, and it freezes in the last metres. The
+ * autopilot always flies the booster, so no stick input can make a Cadet slide or miss.
+ */
+function updateCadetAim(w: World, cmd: FlightCommand, dt: number): void {
+  const r = cmd.aimRate;
+  if (!r || w.cfg.control !== 'cadet' || !w.flags.divert) return;
+  if (pinHeightAboveRails(w.pos, w.tilt) <= CADET_AIM_FREEZE) return;
+  const v = clampLen2(r, CADET_AIM_RATE);
+  w.aim = clampLen2({ x: w.aim.x + v.x * dt, z: w.aim.z + v.z * dt }, cadetAimLimit(w.cfg.pinWindow));
 }
 
 function boardData(b: HealthBoard): Record<string, boolean> {
@@ -264,6 +334,7 @@ export function stepWorld(w: World, cmd: FlightCommand): void {
   if (w.done) return;
   const dt = DT;
   handleCommands(w, cmd);
+  updateCadetAim(w, cmd, dt);
 
   if (w.phase === 'settling') {
     updateSettling(w, dt);
@@ -328,6 +399,7 @@ export function scoreWorld(w: World): ScoreBreakdown {
   return scoreRun({
     caught: !!w.outcome?.caught,
     pinError: c?.lateralError ?? 99,
+    pinWindow: w.cfg.pinWindow,
     contactSpeed: c?.speed ?? 99,
     peakLoadG: w.rails.peakForce / (m * G0),
     propellantKg: c?.propellant ?? w.propellant,

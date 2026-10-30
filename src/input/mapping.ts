@@ -33,6 +33,32 @@ export function deadzone(x: number, y: number, dz = DEADZONE): [number, number] 
   return [x * k, y * k];
 }
 
+/**
+ * Camera-relative steering: turns a screen stick (x right, z down the screen) into world
+ * x/z for a camera with stick yaw `yaw` (see stickYawFrom in src/render/cameras.ts).
+ * Yaw 0 is a camera looking along world -z, where screen and world axes agree.
+ */
+export function rotateStick(x: number, z: number, yaw: number): [number, number] {
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  return [c * x + s * z, -s * x + c * z];
+}
+
+/** The inverse of rotateStick: a world x/z vector in screen axes (x right, z down). */
+export function worldToScreen(x: number, z: number, yaw: number): [number, number] {
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  return [c * x - s * z, s * x + c * z];
+}
+
+/** Angle interpolation along the short way round (k = 0..1). */
+export function lerpAngle(a: number, b: number, k: number): number {
+  let d = (b - a) % (2 * Math.PI);
+  if (d > Math.PI) d -= 2 * Math.PI;
+  if (d < -Math.PI) d += 2 * Math.PI;
+  return a + d * k;
+}
+
 /** Raw intent from one device for one frame (before smoothing). */
 export interface RawIntent {
   stickX: number;

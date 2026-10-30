@@ -11,9 +11,12 @@ import {
   fovToFit,
   frameInSafe,
   safeTop,
+  stickYawFrom,
+  stickYawOf,
   type CameraId,
   type ShotInput,
 } from '../../src/render/cameras';
+import { rotateStick } from '../../src/input/mapping';
 import { WATERLINE_X, terrainHeight } from '../../src/render/terrain';
 import { autopilotCommand } from '../../src/sim/autopilot';
 import { BOOSTER_LENGTH, COM_ABOVE_BASE, PIN_ABOVE_COM, RAIL_Y, TOWER_HEIGHT, TOWER_X } from '../../src/sim/constants';
@@ -63,6 +66,78 @@ describe('auto-director', () => {
       expect(AutoDirector.pip(id, 'caught', 33)).toBeNull();
       expect(AutoDirector.pip(id, 'coast', null)).toBeNull();
     }
+  });
+});
+
+describe('camera-relative steering', () => {
+  // Mid-divert, and late beside the arms.
+  const SHOTS = [
+    { x: 20, y: 260, z: 4 },
+    { x: 6, y: 120, z: -2 },
+  ];
+  for (const id of CAMERA_IDS) {
+    for (const com of SHOTS) {
+      it(`${id}: screen-right on the stick moves the booster right on screen (CoM ${com.x}, ${com.y})`, () => {
+        const rig = new CameraRig(id, 16 / 9);
+        rig.update({ com, axis: { x: 0, y: 1, z: 0 }, thrustFrac: 0.2, t: 18, reducedMotion: true }, 0, true);
+        const c = rig.camera;
+        c.updateMatrixWorld();
+        const yaw = stickYawOf(c);
+        const p = new THREE.Vector3(com.x, com.y, com.z);
+        const ndc0 = p.clone().project(c);
+        // Screen right -> world, then 5 m that way.
+        const [rx, rz] = rotateStick(1, 0, yaw);
+        expect(Math.hypot(rx, rz)).toBeCloseTo(1, 9);
+        const ndcR = p.clone().add(new THREE.Vector3(rx * 5, 0, rz * 5)).project(c);
+        expect(ndcR.x, `${id} right`).toBeGreaterThan(ndc0.x + 1e-4);
+        expect(Math.abs(ndcR.y - ndc0.y), `${id} stays level`).toBeLessThan(Math.abs(ndcR.x - ndc0.x));
+        // Screen up -> into the scene: away from the lens over the ground.
+        const [ux, uz] = rotateStick(0, -1, yaw);
+        const fwd = new THREE.Vector3();
+        c.getWorldDirection(fwd);
+        const up = new THREE.Vector3(0, 1, 0).applyQuaternion(c.quaternion);
+        const into = fwd.y < -0.9 ? up : fwd; // a lens looking straight down: "up the screen"
+        expect(ux * into.x + uz * into.z, `${id} up = into the scene`).toBeGreaterThan(0);
+      });
+    }
+  }
+
+  it('tower top: pulling the stick down (toward the tower on screen) moves toward the tower', () => {
+    const rig = new CameraRig('towerTop', 16 / 9);
+    rig.update({ com: { x: 8, y: 140, z: 0 }, axis: { x: 0, y: 1, z: 0 }, thrustFrac: 0.2, t: 22, reducedMotion: true }, 0, true);
+    const [x] = rotateStick(0, 1, stickYawOf(rig.camera));
+    expect(x).toBeLessThan(-0.5); // the tower stands inland, at -x
+  });
+
+  it('a level lens looking along -z needs no turn; the yaw is continuous across the horizon', () => {
+    expect(stickYawFrom({ x: 0, y: 0, z: -1 }, { x: 0, y: 1, z: 0 })).toBeCloseTo(0, 9);
+    const s = Math.SQRT1_2;
+    const down = stickYawFrom({ x: 0, y: -s, z: -s }, { x: 0, y: s, z: -s });
+    const upward = stickYawFrom({ x: 0, y: s, z: -s }, { x: 0, y: s, z: s });
+    expect(down).toBeCloseTo(0, 9);
+    expect(upward).toBeCloseTo(0, 9);
+  });
+});
+
+describe('auto-director holds the shot while the player steers', () => {
+  const fly = (steering: boolean): Map<number, CameraId> => {
+    const d = new AutoDirector();
+    const shots = new Map<number, CameraId>();
+    for (let tau = 0; tau <= 26.0001; tau += 0.1) {
+      const t = tau + 4;
+      shots.set(Math.round(tau * 10), d.update(tau < 4 ? 'burn13' : 'burn3', tau, false, null, t, steering));
+    }
+    return shots;
+  };
+  it('no cut between 13 s and 23 s when steering; the usual cuts otherwise', () => {
+    const steer = fly(true);
+    const at = steer.get(130);
+    expect(at).toBeDefined();
+    for (let k = 130; k < 230; k++) expect(steer.get(k), `tau ${k / 10}`).toBe(at);
+    expect(steer.get(240)).toBe('towerTop');
+    const free = fly(false);
+    expect(free.get(170)).toBe('beach');
+    expect(free.get(210)).toBe('towerTop');
   });
 });
 

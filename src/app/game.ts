@@ -2,19 +2,43 @@
 // tutorial, the replay player, the view, HUD, LEFT rail menu, audio and the test hooks.
 // The sim itself stays pure in src/sim.
 import { AudioEngine, type Sfx } from '../audio/audio';
+import { Voice } from '../audio/voice';
 import { InputDevices } from '../input/devices';
-import { CATCH_HOLD, DIVERT_HOLD } from '../input/mapping';
-import { AutoDirector, BEACH_CAM, CAMERA_IDS, CAMERA_LABELS, TOWER_CAM, WIDE_CAM, type CameraId, type ShotInput } from '../render/cameras';
+import { CATCH_HOLD, DIVERT_HOLD, lerpAngle, worldToScreen } from '../input/mapping';
+import {
+  AutoDirector,
+  BEACH_CAM,
+  CAMERA_IDS,
+  CAMERA_LABELS,
+  TOWER_CAM,
+  WIDE_CAM,
+  stickYawFrom,
+  stickYawOf,
+  type CameraId,
+  type ShotInput,
+} from '../render/cameras';
 import { AdaptiveQuality, autoStartTier } from '../render/quality';
 import type { FrameState } from '../render/scene';
 import { View, hasWebGL2 } from '../render/view';
 import { ghostPath } from '../sim/autopilot';
-import { CONTACT_COM_Y, COM_ABOVE_BASE, DT, ENGINE_COUNT, ENGINE_THRUST, RAIL_Y, SHORELINE_X, SOUND_SPEED } from '../sim/constants';
+import {
+  BOOSTER_DIAMETER,
+  CONTACT_CLEAN,
+  CONTACT_COM_Y,
+  COM_ABOVE_BASE,
+  DT,
+  ENGINE_COUNT,
+  ENGINE_THRUST,
+  RAD,
+  RAIL_Y,
+  SHORELINE_X,
+  SOUND_SPEED,
+} from '../sim/constants';
 import { commandFor } from '../sim/control';
 import { countRunning } from '../sim/engines';
 import { makeGoNoGo } from '../sim/gonogo';
-import { pinHeightAboveRails, pinPosition, stopHeight, timeToContact } from '../sim/predictor';
-import { idealIgnitionHeight } from '../sim/reference';
+import { pinHeightAboveRails, pinPosition, stopHeight, timeToContact, uprightPinOffset } from '../sim/predictor';
+import { T_DIVERT, T_DIVERT_END, idealIgnitionHeight } from '../sim/reference';
 import { InputRecorder } from '../sim/replay';
 import type { ScoreBreakdown } from '../sim/scoring';
 import { buildTimeline, flightSeries, frameAt, type Timeline, type TimelineFrame } from '../sim/timeline';
@@ -22,16 +46,16 @@ import { TIER_CONFIG, type TierId } from '../sim/tiers';
 import { tipFor } from '../sim/tips';
 import { makeArms } from '../sim/tower';
 import { NEUTRAL_INPUT, type EngineState, type PilotInput, type SimEvent, type World } from '../sim/types';
-import { axisFromTilt, type Vec2, type Vec3 } from '../sim/vec';
+import { axisFromTilt, tiltAngle, type Vec2, type Vec3 } from '../sim/vec';
 import { windAt } from '../sim/wind';
 import { createWorld, scoreWorld, slowMoActive, stepWorld, tauOf } from '../sim/world';
 import { clearMyData } from '../sw-register';
 import { el } from '../ui/dom';
-import { Hud, type HudData } from '../ui/hud';
+import { Hud, toneFor, type HudData, type Tone } from '../ui/hud';
 import { Menu, type DebriefData } from '../ui/menu';
 import { ReplayBar } from '../ui/replaybar';
 import { TouchControls, isTouchDevice } from '../ui/touch';
-import { TutorialView, type InputKind } from '../ui/tutorialView';
+import { TutorialView, tutorialLine, type InputKind } from '../ui/tutorialView';
 import type { Hooks } from './params';
 import { ReplayClock } from './scrubber';
 import { defaultSettings, loadBest, loadSettings, saveBest, saveSettings, type Settings } from './storage';
@@ -46,6 +70,28 @@ const DEBRIEF_DELAY_SPLASH = SPLASH_SECONDS + 0.5;
 const BOOM_AFTER_IGNITION: Record<CameraId, number> = { beach: 19, wide: 19.6, towerTop: 15.5, chase: 14, onboard: 13 };
 const COUNT_UP_SECONDS = 1.4;
 const SPLIT_CAMS: readonly CameraId[] = ['beach', 'towerTop', 'chase', 'wide'];
+/** s: across a camera cut the stick frame turns smoothly to the new camera's yaw. */
+const YAW_BLEND = 0.5;
+/** s: the player counts as steering for this long after the last stick deflection. */
+const STEER_MEMORY = 1.2;
+/** The 3-2-1 ignition cue shows from this many seconds before the ideal ignition. */
+const CUE_SECONDS = 3.5;
+/** m/s^2: the gentle braking the V/S tone allows for (reach 2 m/s at the rails from here). */
+const VS_BRAKE = 1.5;
+
+/** V/S tone near the arms: against the speed from which gentle braking still gives a clean contact. */
+function vsToneFor(down: number, pinHeight: number): Tone | null {
+  if (pinHeight > 120) return null;
+  const limit = CONTACT_CLEAN + Math.sqrt(2 * VS_BRAKE * Math.max(0, pinHeight));
+  return down < 0.8 * limit ? 'ok' : down < limit ? 'warn' : 'bad';
+}
+
+/** Tutorial practice: a Cadet run flown up to the divert (the "ghost" booster the stick moves). */
+interface Practice {
+  world: World;
+  /** The state at the start of the practice, to loop back to. */
+  start: World;
+}
 
 interface Run {
   world: World;
@@ -67,6 +113,8 @@ interface Run {
   debriefShown: boolean;
   /** True while the tutorial runs on top of this run: the sim does not step. */
   frozen: boolean;
+  /** Cadet tapped LIGHT before the mark: the HUD shows "armed"; the auto ignition lights on time. */
+  lightArmed: boolean;
 }
 
 interface ReplayState {
@@ -169,7 +217,15 @@ export class Game {
   private readonly splitLabels: HTMLDivElement;
   private readonly fadeEl: HTMLDivElement;
   private readonly audio = new AudioEngine();
+  private readonly voice = new Voice();
   private readonly director = new AutoDirector();
+  /** Camera-relative steering: the stick yaw now, and the blend across a cut. */
+  private stickYaw = 0;
+  private yawFrom = 0;
+  private yawBlend = 1;
+  private yawCam: CameraId | null = null;
+  private lastSteerReal = -1e9;
+  private practice: Practice | null = null;
   private manualCam: CameraId | null = null;
   private camera: CameraId = 'wide';
   private lastCamera: CameraId = 'wide';
@@ -230,7 +286,11 @@ export class Game {
     this.splitLabels = el('div', { id: 'split-labels', 'aria-hidden': 'true' }, SPLIT_CAMS.map((c) => el('span', { text: CAMERA_LABELS[c] })));
     this.splitLabels.hidden = true;
     app.append(this.splitLabels);
-    this.tutorialView = new TutorialView(app, () => this.tutorial?.skip());
+    this.tutorialView = new TutorialView(
+      app,
+      () => this.tutorial?.skip(),
+      () => this.tutorial?.skipStep(),
+    );
     this.replayBar = new ReplayBar(app, {
       onToggle: () => this.replay?.clock.toggle(),
       onSeek: (f) => this.seekReplay(f),
@@ -264,6 +324,7 @@ export class Game {
     this.audio.setVolume(this.settings.volume);
     this.audio.setMusicOn(this.settings.music);
     this.audio.timescale = hooks.timescale;
+    this.voice.enabled = this.settings.voice && !this.settings.muted && !hooks.active;
     this.applyClasses();
 
     this.devices.onUiKey((k) => this.onUiKey(k));
@@ -440,17 +501,55 @@ export class Game {
     if (!r) return;
     r.frozen = true;
     this.tutorial = new Tutorial();
+    this.practice = this.makePractice(r.seed);
     this.menu.setMode('tutorial');
     this.app.classList.add('tutorial');
     this.hud.clearCaption();
+    this.director.reset();
+    this.view?.resetCameras();
+    this.speak(tutorialLine('steer', this.inputKind()));
+  }
+
+  /**
+   * The steer-step practice: the real Cadet sim, flown hands-off to just after the divert
+   * starts. The player's stick moves its aim point; it loops back before it reaches the arms.
+   */
+  private makePractice(seed: number): Practice | null {
+    const w = createWorld(seed, 'cadet');
+    let guard = 0;
+    while (!w.done && guard++ < 120 * 60) {
+      const tau = tauOf(w);
+      if (tau !== null && w.flags.divert && tau >= T_DIVERT + 0.5) return { world: w, start: structuredClone(w) };
+      stepWorld(w, commandFor(w, NEUTRAL_INPUT, false));
+    }
+    return null;
+  }
+
+  /** Steps the practice booster in real time with the player's (world-axis) stick. */
+  private stepPractice(p: Practice, input: PilotInput, seconds: number): void {
+    const n = Math.min(240, Math.round(seconds / DT));
+    const inp = { ...NEUTRAL_INPUT, stickX: input.stickX, stickZ: input.stickZ };
+    for (let i = 0; i < n; i++) {
+      const tau = tauOf(p.world);
+      if (p.world.done || (tau !== null && tau > T_DIVERT_END)) p.world = structuredClone(p.start);
+      stepWorld(p.world, commandFor(p.world, inp, false));
+    }
+  }
+
+  /** Speaks a coach line (Cadet only, offline voices only, when the setting is on). */
+  private speak(text: string | null): void {
+    if (text) this.voice.say(text);
   }
 
   private endTutorial(): void {
     const t = this.tutorial;
     if (!t) return;
     this.tutorial = null;
+    this.practice = null;
     this.tutorialView.hide();
     this.app.classList.remove('tutorial');
+    this.director.reset();
+    this.view?.resetCameras();
     this.settings = { ...this.settings, tutorialDone: true };
     saveSettings(this.settings);
     this.menu.setSettings(this.settings);
@@ -461,7 +560,9 @@ export class Game {
       r.frozen = false;
       r.pending = null;
       this.menu.setMode('playing');
-      this.callout(t.skipped ? 'Tutorial skipped. Have fun!' : 'Great! Now fly it for real.', 'blip', 'coach');
+      const line = t.skipped ? 'Tutorial skipped. Have fun!' : 'Great! Now fly it for real.';
+      this.callout(line, 'blip', 'coach');
+      this.speak(line);
     }
   }
 
@@ -469,9 +570,11 @@ export class Game {
     if (!this.hooks.still) this.audio.unlock(); // still frames have no user gesture
     this.exitReplayState();
     this.tutorial = null;
+    this.practice = null;
     this.tutorialView.hide();
     this.app.classList.remove('tutorial');
     this.audio.resetRun();
+    this.voice.stop();
     this.devices.reset();
     this.touch.reset();
     this.hud.clearCaption();
@@ -495,6 +598,7 @@ export class Game {
       score: null,
       debriefShown: false,
       frozen: false,
+      lightArmed: false,
     };
     this.paused = false;
     this.menu.setMode('playing');
@@ -519,6 +623,8 @@ export class Game {
   private toMainMenu(): void {
     this.exitReplayState();
     this.tutorial = null;
+    this.practice = null;
+    this.voice.stop();
     this.tutorialView.hide();
     this.app.classList.remove('tutorial');
     this.run = null;
@@ -561,6 +667,8 @@ export class Game {
     this.audio.setMuted(s.muted);
     this.audio.setVolume(s.volume);
     this.audio.setMusicOn(s.music);
+    this.voice.enabled = s.voice && !s.muted && !this.hooks.active;
+    if (!this.voice.enabled) this.voice.stop();
     this.devices.setKeyMap(s.keys);
     this.applyClasses();
     if (qualityChanged && !this.hooks.still && !this.hooks.quality) {
@@ -603,6 +711,41 @@ export class Game {
     if (steps >= MAX_STEPS_PER_FRAME) r.acc = 0;
     if (w.done) r.acc = 0;
     this.processEvents(r);
+  }
+
+  /**
+   * Camera-relative steering: follows the active camera's yaw, and turns smoothly over
+   * YAW_BLEND seconds after a cut, so the stick never flips under the thumb.
+   */
+  private updateStickYaw(dt: number): void {
+    const id = this.camera;
+    const w = this.practice?.world ?? this.run?.world;
+    let target = this.stickYaw;
+    const cam = this.view?.rigs[id].camera;
+    if (cam) target = stickYawOf(cam);
+    else if (w) {
+      const c = this.camPos(id, w.pos);
+      target = stickYawFrom({ x: w.pos.x - c.x, y: w.pos.y - c.y, z: w.pos.z - c.z }, { x: 0, y: 1, z: 0 });
+    }
+    if (this.yawCam === null) {
+      this.yawCam = id;
+      this.yawBlend = 1;
+      this.stickYaw = target;
+      return;
+    }
+    if (id !== this.yawCam) {
+      this.yawCam = id;
+      this.yawFrom = this.stickYaw;
+      this.yawBlend = 0;
+    }
+    this.yawBlend = Math.min(1, this.yawBlend + dt / YAW_BLEND);
+    const k = this.yawBlend * this.yawBlend * (3 - 2 * this.yawBlend);
+    this.stickYaw = k >= 1 ? target : lerpAngle(this.yawFrom, target, k);
+  }
+
+  /** True while the player has been on the stick recently. */
+  private get steering(): boolean {
+    return this.realTime - this.lastSteerReal < STEER_MEMORY;
   }
 
   private camPos(id: CameraId, boosterPos: Vec3): Vec3 {
@@ -668,19 +811,22 @@ export class Game {
         break;
       case 'go':
         this.callout('Flight Director, we are GO for catch.');
-        if (c.coach) this.later(3.4, 'Nice and steady. Nudge the stick to line up with the glowing ring.');
         break;
       case 'noGo':
         this.callout('No-go, divert.');
         break;
       case 'divertStart':
-        this.callout('Divert. Swinging in toward the tower.', null);
+        // The stick starts to act now: the coach line is an instruction, with the arrow.
+        if (c.coach) this.coach('Steer onto the ring! Push the stick the way the arrow points.', 'tick');
+        else this.callout('Divert. Swinging in toward the tower.', null);
         break;
       case 'hover':
-        this.callout(c.coach ? 'Good! Keep the pin ghost inside the ring.' : 'Vertical. Settling beside the arms.', null, c.coach ? 'coach' : 'radio');
+        if (c.coach) this.coach('Good! Keep the pins inside the ring.');
+        else this.callout('Vertical. Settling beside the arms.', null);
         break;
       case 'catchPrompt':
-        this.callout(c.coach ? 'Press and hold CATCH now!' : 'Stand by to catch.', 'tick');
+        if (c.coach) this.coach('Press and hold CATCH now!', 'tick');
+        else this.callout('Stand by to catch.', 'tick');
         break;
       case 'armsCloseStart':
         this.callout('Arms closing.');
@@ -714,19 +860,10 @@ export class Game {
     }
   }
 
-  /** A coaching caption after `seconds` of play time (dropped if a newer run started). */
-  private later(seconds: number, text: string): void {
-    const run = this.run;
-    const at = this.realTime + seconds;
-    const check = (): void => {
-      if (this.run !== run || this.disposed) return;
-      if (this.paused || this.realTime < at) {
-        window.setTimeout(check, 200);
-        return;
-      }
-      this.hud.caption(text, this.realTime, 3.4, 'coach');
-    };
-    window.setTimeout(check, 200);
+  /** A Cadet coach line: a coach caption, and spoken when the voice coach is on. */
+  private coach(text: string, sfx: Sfx | null = null): void {
+    this.callout(text, sfx, 'coach');
+    this.speak(text);
   }
 
   private finishRun(r: Run): void {
@@ -892,16 +1029,31 @@ export class Game {
       this.stepReplay(dt);
     } else if (r && !this.paused) {
       this.realTime += dt * this.hooks.timescale;
-      const input = this.devices.sample(dt);
+      this.updateStickYaw(dt);
+      const input = this.devices.sample(dt, this.stickYaw);
+      if (this.devices.rawStick > 0.25) this.lastSteerReal = this.realTime;
       if (r.frozen && this.tutorial) {
-        this.tutorial.update(dt, {
+        const t = this.tutorial;
+        const before = t.step;
+        t.update(dt, {
           stick: Math.hypot(input.stickX, input.stickZ),
           ignite: input.ignite,
           closeArms: input.closeArms,
         });
-        this.tutorialView.update(this.tutorial, this.inputKind());
-        if (this.tutorial.finished) this.endTutorial();
+        if (t.step === 'steer' && this.practice) this.stepPractice(this.practice, input, dt * this.hooks.timescale);
+        if (t.step !== before) {
+          if (before === 'steer') {
+            // Back to the frozen run: the cameras jump to it.
+            this.practice = null;
+            this.director.reset();
+            this.view?.resetCameras();
+          }
+          this.speak(tutorialLine(t.step, this.inputKind()));
+        }
+        this.tutorialView.update(t, this.inputKind());
+        if (t.finished) this.endTutorial();
       } else {
+        if (r.tier === 'cadet' && !r.autopilot && input.ignite && r.world.phase === 'coast') r.lightArmed = true;
         const scale = this.hooks.timescale * (slowMoActive(r.world) ? SLOW_MO : 1);
         if (!r.world.done) this.stepRun(r, input, dt * scale);
         if (r.world.done) this.finishRun(r);
@@ -952,8 +1104,8 @@ export class Game {
     return { frame, shot };
   }
 
-  private noAids(ringRadius: number): FrameState['aids'] {
-    return { show: false, ghost: [], pinGhost: null, ringRadius, flash: 0 };
+  private noAids(pinWindow: number): FrameState['aids'] {
+    return { show: false, ring: false, ghost: [], pinGhost: null, ringRadius: BOOSTER_DIAMETER / 2 + pinWindow, flash: 0, tone: 'bad' };
   }
 
   /** The frame for the live run (or the menu backdrop). */
@@ -966,16 +1118,25 @@ export class Game {
       pos = p.pos;
       splash = p.splash;
     }
-    const showAids = active && w.cfg.id === 'cadet' && !w.done && w.phase !== 'coast';
+    const flying = active && !w.done && (w.phase === 'burn13' || w.phase === 'burn3');
     let aids = this.noAids(w.cfg.pinWindow);
-    if (showAids) {
+    if (flying) {
       const pin = pinPosition(w.pos, w.tilt);
-      const tgo = Math.min(timeToContact(pin.y - RAIL_Y, w.vel.y), 8);
-      const pinGhost = { x: pin.x + w.vel.x * tgo, y: RAIL_Y + 0.6, z: pin.z + w.vel.z * tgo };
+      // The target ring (every tier): the hull fits inside it when the pins are in the window.
+      const ringRadius = BOOSTER_DIAMETER / 2 + w.cfg.pinWindow;
+      const up = uprightPinOffset(w.pos);
+      const tone = toneFor(Math.hypot(up.x, up.z), w.cfg.pinWindow);
       // The target ring flashes when CATCH is pressed.
       const pressed = r ? r.catchReal : null;
       const flash = pressed !== null ? Math.max(0, 1 - (this.realTime - pressed) / 0.7) : 0;
-      aids = { show: true, ghost: ghostPath(w, 24), pinGhost, ringRadius: w.cfg.pinWindow, flash };
+      aids = { show: false, ring: true, ghost: [], pinGhost: null, ringRadius, flash, tone };
+      if (w.cfg.id === 'cadet') {
+        // Cadet extras: the ghost path and where the pins will cross the rails.
+        const tgo = Math.min(timeToContact(pin.y - RAIL_Y, w.vel.y), 8);
+        aids.show = true;
+        aids.ghost = ghostPath(w, 24);
+        aids.pinGhost = { x: pin.x + w.vel.x * tgo, y: RAIL_Y + 0.6, z: pin.z + w.vel.z * tgo };
+      }
     }
     const hero = !active && this.camera === 'wide';
     // Held in the arms: cold vapour vents gently from the booster (menu hero, catch, debrief).
@@ -1011,10 +1172,15 @@ export class Game {
     }
     this.splitLabels.hidden = true;
     const r = this.run;
-    const w = r ? r.world : this.menuBackdrop;
-    if (r) {
+    // Tutorial steer step: show the practice booster instead of the frozen run.
+    const practice = r && this.tutorial?.step === 'steer' ? this.practice : null;
+    const w = practice ? practice.world : r ? r.world : this.menuBackdrop;
+    if (practice) {
+      // The wide shot holds still: the whole swing toward the tower reads left-right.
+      this.camera = this.manualCam ?? 'wide';
+    } else if (r) {
       const tau = tauOf(w);
-      const auto = this.director.update(w.phase, tau, w.arms.closing, r.contactT ?? r.world.outcome?.t ?? null, w.t);
+      const auto = this.director.update(w.phase, tau, w.arms.closing, r.contactT ?? r.world.outcome?.t ?? null, w.t, this.steering);
       this.camera = this.manualCam ?? auto;
     } else if (!this.manualCam) this.camera = 'wide';
     this.menu.setCamera(this.camera, this.manualCam === null);
@@ -1041,7 +1207,7 @@ export class Game {
       const fins = w.phase === 'coast' || w.phase === 'burn13' ? Math.min(1, Math.max(0, (speed - 60) / 220)) : 0;
       this.audio.updateRoar(w.t, Math.min(1, engineFrac(w.engines) * 2.2), w.phase === 'burn3', dist, fins);
       this.audio.setMusic(this.musicIntensity(w), !w.done);
-      this.hud.update(this.hudData(r), this.realTime);
+      this.hud.update(this.hudData(r, w, !!practice), this.realTime);
     } else this.audio.setMusic(0, true);
     this.updateTestState();
   }
@@ -1089,8 +1255,7 @@ export class Game {
     }
   }
 
-  private hudData(r: Run): HudData {
-    const w = r.world;
+  private hudData(r: Run, w: World, practice: boolean): HudData {
     const tau = tauOf(w);
     const down = Math.max(-w.vel.y, 0);
     const prop0 = w.cfg.propellant[1];
@@ -1111,6 +1276,19 @@ export class Game {
       wind = { speed: Math.hypot(v.x, v.z), dir: Math.atan2(v.z, v.x), gust: Math.hypot(w.wind.gustX, w.wind.gustZ), shear: w.wind.shear > 0.05 };
     }
     const tut = r.frozen ? this.tutorial : null;
+    const cadet = cfg.id === 'cadet';
+    // Pins vs the arm centreline, and the way to steer in screen axes.
+    let pin: HudData['pin'] = null;
+    if (flying && (!cadet || w.flags.divert)) {
+      // Upright pin offset: the lean's swing of the raw pins would invite over-steering.
+      const p = uprightPinOffset(w.pos);
+      const dist = Math.hypot(p.x, p.z);
+      const [sx, sz] = worldToScreen(-p.x, -p.z, this.stickYaw);
+      const l = Math.hypot(sx, sz) || 1;
+      pin = { dist, sx: sx / l, sz: sz / l, tone: toneFor(dist, cfg.pinWindow) };
+    }
+    const tiltDeg = tiltAngle(w.tilt) / RAD;
+    const cue = w.phase === 'coast' && igniteIn !== null && igniteIn <= CUE_SECONDS ? Math.max(0, igniteIn) : null;
     const d: HudData = {
       tier: r.tier,
       phase: w.phase,
@@ -1132,14 +1310,22 @@ export class Game {
       catchHold: this.devices.touch.catchHeldFor / CATCH_HOLD,
       armsClosing: w.arms.closing,
       stepVisible: manual && !cfg.autoStepDown && w.phase === 'burn13',
-      lightVisible: manual && w.phase === 'coast' && (cfg.id !== 'cadet' || (igniteIn !== null && igniteIn <= 3.5)),
+      lightVisible: manual && w.phase === 'coast' && (!cadet || cue !== null),
       divertHold: this.devices.divertHold / DIVERT_HOLD,
       wind,
       sensorFault: cfg.id === 'fd' && w.faults.towerSensor,
       slowMo: slowMoActive(w),
-      camera: `${CAMERA_LABELS[this.camera]}${this.manualCam ? '' : ' · auto'}`,
+      camera: `${practice ? 'Practice · ' : ''}${CAMERA_LABELS[this.camera]}${this.manualCam ? '' : ' · auto'}`,
       fps: this.hooks.fps && !this.hooks.still ? this.fps : null,
       paused: this.paused,
+      pin,
+      tilt: flying ? { deg: tiltDeg, tone: toneFor(tiltDeg, cfg.tiltLimitDeg) } : null,
+      vsTone: flying ? vsToneFor(down, hp) : null,
+      cue,
+      lightArmed: cadet && r.lightArmed && w.phase === 'coast',
+      // From the divert until the pins are well inside the ring (and while the practice runs).
+      steerCue: cadet && !r.autopilot && pin !== null && (practice || pin.tone !== 'ok' || !w.flags.hover),
+      foldBoard: cadet,
     };
     if (tut) {
       // Practice: show only the control this step teaches.
@@ -1148,6 +1334,8 @@ export class Game {
       d.catchTgo = null;
       d.armsClosing = false;
       d.igniteIn = null;
+      d.cue = null;
+      d.steerCue = practice;
     }
     return d;
   }
@@ -1183,6 +1371,13 @@ export class Game {
       camera: rp.split ? 'Split · synced cams' : `${CAMERA_LABELS[this.camera]}${this.manualCam ? '' : ' · auto'} · REPLAY`,
       fps: this.hooks.fps && !this.hooks.still ? this.fps : null,
       paused: false,
+      pin: null,
+      tilt: null,
+      vsTone: null,
+      cue: null,
+      lightArmed: false,
+      steerCue: false,
+      foldBoard: rp.tier === 'cadet',
     };
   }
 

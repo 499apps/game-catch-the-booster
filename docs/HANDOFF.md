@@ -1,83 +1,153 @@
-# Handoff: C4 art-director and game-feel polish pass
+# Handoff: C5 gate-review fix pass
 
-I could not run any tools this turn (hybrid mode). All code is unverified until the operator runs the steps below. I studied the C3 snapshots in `.operator/snaps-c3/` and the reference stills.
+I could not run any tools this turn. All code is unverified until the operator runs the steps below.
 
-## What I changed (the 10 operator notes, most visible first)
+I could not read the gate report (`C:\Users\a\claude-tasks\catch\gate1.result.md`): the session had no read permission for that folder. I worked from the 10-item list in the brief.
 
-| # | Note | Fix | Files |
+## What I changed
+
+| # | Item | Fix | Files |
 | --- | --- | --- | --- |
-| 1 | The telemetry strip shows behind the debrief | `showDebrief()` and the replay exit hide the whole HUD (strip, captions, camera tag, buttons). The touch sticks were already hidden outside a flight. New e2e assertion: the HUD is hidden on the debrief. | `src/app/game.ts`, `tests/e2e/play.spec.ts` |
-| 2 | FD +10 s: the booster is a dot under the HUD | New `frameInSafe()`: it picks the lens and the aim so that every subject point sits in the band below the HUD (top 22% desktop, 30% portrait) and above a bottom margin. The beach, wide and chase rigs use it. Portrait phones get a wider maximum lens and a chase drone 185 m out. New unit tests fly the autopilot (cadet, pilot, fd x2) on 1280x720 and 393x852 and check the CoM and the nose of every auto shot against the safe rect. | `src/render/cameras.ts`, `tests/unit/render.test.ts` |
-| 3 | The crowd reads as dark pegs | About 200 people in 20 loose clusters with open sand between them. Each person has legs with a gap, a torso wider at the shoulders, arms and a head. Adults are about 1.7 m, kids about 1.1 m, and 18% sit. The clothes have muted colours and a slight sky lift on the shaded side. About a third raise their arms after the catch. The beach-cam group moved inland and farther away. | `src/render/scene.ts` (`buildCrowd`) |
-| 4 | The ground and beach are flat beige | Pale wind patches, darker dune faces, a broken wrack line, sage grass, and a low-frequency brightness swell. A new wet-sand band at the waterline mirrors the sky (Fresnel), has a sun glint, and has two swash foam lines that run up and back. The ocean is not changed. | `src/render/scene.ts` (`buildGround`), `src/render/materials.ts` (`makeWetSandMaterial`) |
-| 5 | Hero menu: the booster floats, with no context | A new three-quarter hero camera at (-90, 200). From there the line to the booster passes 15 m clear of the tower, and the arms are seen about 25 deg off their side. It frames the tower top and the caught booster large, right of the rail. Cold vapour vents from the top and sinks from the engine bay. The sun is warmer and stronger in the hero shot, which gives a rim light. | `src/render/cameras.ts`, `src/render/scene.ts`, `src/app/game.ts` |
-| 6 | Tower-top +20 s: a white bloom blob and a lens streak | `tuneForCamera()` trims the nozzle sprite (-80%), the outer shell (-45%), bloom strength (-60%) and the streak (-75%) when the engine end is near the lens. The 3-engine plume has a white-gold core with an orange falloff, and stronger shock diamonds. A downwash ring and a churned disc on the water show under the plume, and they start at 160 m. The hull glow is stronger near the ground. | `src/render/scene.ts`, `src/render/view.ts`, `src/render/materials.ts` |
-| 7 | The CLOSING ring is clipped and covers the tower | The text is shorter ("✓ arms") and stays inside the inner disc. The button is never closer than 16 px to the right edge, and its size is capped at 30vw. | `src/ui/hud.ts`, `src/ui/styles.css` |
-| 8 | The tower is a uniform black truss | The steel is lighter and weathered grey, with more sky reflection, which gives the dusk rim. Each bay and face has its own tone, and the braces are lighter than the diagonals. The red warning lights blink about 40 times a minute (slower and softer with reduced motion). Each light has a fixed-pixel halo, so it shows on the long lenses. | `src/render/scene.ts` (`buildTower`) |
-| 9 | A dark raceway line down the hull | The chines and the raceway are now flat raised strips (0.9 m wide, about 0.12 m proud). They use the hull's own stainless tone (metal 1, roughness 0.34) and receive shadows. | `src/render/scene.ts` |
-| 10 | Game feel | Thrust-scaled micro-shake: two frequencies plus a small roll. It scales with lens and distance, and it is off with reduced motion. A settle bounce on pin contact: the frame dips and rings out over 1.6 s. CATCH press: the 3D target ring flashes white and swells, and the CATCH button flashes. Debrief: the medal waits small while the score counts up, then pops with a shine ring. | `src/render/cameras.ts`, `src/render/scene.ts`, `src/ui/hud.ts`, `src/ui/menu.ts`, `src/ui/styles.css` |
+| 1 | Camera-relative steering | The game turns the raw stick by the yaw of the active camera, before the shaper. Screen right is right on screen. Screen up is into the scene, away from the lens. On the tower-top lens, "down" moves toward the tower. The recorder logs the turned (world) values, so a replay is still seed + input log. Across a cut, the yaw blends over 0.5 s. The director holds its shot from +13 s to +23 s while the player steers (stick used in the last 1.2 s). | `src/render/cameras.ts` (`stickYawFrom`, `stickYawOf`, `AutoDirector.STEER_HOLD`), `src/input/mapping.ts` (`rotateStick`, `worldToScreen`, `lerpAngle`), `src/input/devices.ts` (`sample(dt, stickYaw)`), `src/app/game.ts` |
+| 2 | Cadet divert flies itself | The Cadet stick is now a trim of up to 3.5 m/s on top of the reference divert velocity. It does not replace it. The hands-off divert aims at a small seeded offset (1.0 to 2.2 m), so the booster lands inside the 3 m window, and the stick earns the Bullseye. At the divert start, the coach says "Steer onto the ring!", and a large screen-space arrow points to the ring. The old coach line came 3.4 s after GO, before the stick had any effect. I removed it. | `src/sim/autopilot.ts` (`trim`, `cadetAimOffset`), `src/sim/control.ts`, `src/app/game.ts`, `src/ui/hud.ts` |
+| 3 | Visible target ring | The ring radius is the hull radius plus the pin window (7.5 m in Cadet, 6 m in Pilot and FD). It has no depth test and render order 20, so it always shows around the hull. It shows in every tier while the engines burn. Its colour follows the pin tolerance. The HUD has a new PIN chip: the distance in m, an arrow that shows the way to push the stick, and a colour and a glyph (✓ ! ✕). | `src/render/scene.ts`, `src/app/game.ts`, `src/ui/hud.ts` |
+| 4 | Ignition pre-roll | Every run starts 3 s earlier on the same coast (`PREROLL`), about 2.6 km up. The start state comes from a backward integration of the old start state, so the booster passes the old start point and lights in the same state as before. A large "3… 2… 1… LIGHT" cue shows in every tier. A Cadet tap before the mark shows "ARMED ✓", and the auto ignition lights on the mark. The ignition score now falls to 0 at 600 m (it was 160 m). 1 s early or late (about 300 m) still gives about 50 of 100. | `src/sim/world.ts` (`PREROLL`, `coastBackward`), `src/sim/scoring.ts`, `src/sim/control.ts`, `src/ui/hud.ts`, `src/app/game.ts` |
+| 5 | Phone HUD | On phones the strip is a grid of 2 rows, plus 1 row for the board. Row 1: engines, altitude, V/S, STOP and clock. Row 2: PIN and TILT chips and wind. I estimate the height at 12 to 15% of a 393x852 screen. The V/S chip is coloured against the 2 m/s contact limit near the arms. Cadet folds the board into one GO chip. The PIN, TILT and V/S chips show in all tiers, with glyphs. | `src/ui/hud.ts`, `src/ui/styles.css` |
+| 6 | Lens streak and flare | The streak and the ghosts come only from the ignition flash. The streak is 4× narrower. The ghosts are masked out around the tower top. The wide and beach lenses flare only at the ignition moment. | `src/render/post.ts`, `src/render/view.ts` |
+| 7 | Plume and hull look | 13 engines: a dimmer core, a saturated yellow-orange edge, 40% less bloom and a stronger exposure pump. 3 engines: a dimmer shell, and the shock diamonds are about 1.8× stronger. After cutoff, the vent vapour is dim grey with a low alpha (it was near-white). The tower steel is now a cool, neutral grey with no rust tint. | `src/render/scene.ts`, `src/render/view.ts`, `src/render/materials.ts` |
+| 8 | Pilot fairness | In the burn, the Pilot stick sets the lean angle: full stick is 10°. A damping lean opposes the sideways speed (time constant 1.6 s on 13 engines, 2.5 s on 3 engines). A hands-off booster stops sliding. Full stick on 3 engines settles at about 4.5 m/s. While coasting, the stick still nudges the attitude rate. New test: a "simple human" bot. It reads the visible pin offset, V/S and cues 250 ms late, with hand noise. It must catch on at least 3 of 5 seeds. | `src/sim/control.ts` (`pilotLean`), `tests/unit/assist.test.ts` |
+| 9 | Tutorial | Steps wait for the player. After 6 s the card shows a hint and "Skip step". "Skip tutorial" is always there. In the steer step, a practice ("ghost") booster flies with the real Cadet sim, starting just after the divert. The stick moves it, and it loops back before it reaches the arms. The frozen run behind it does not step. Cards and Cadet coach lines are spoken through `speechSynthesis`, with local voices only (`localService`). New setting: "Voice coach (Cadet)", on by default. The voice is off when muted and under the test hooks. | `src/app/tutorial.ts`, `src/ui/tutorialView.ts`, `src/audio/voice.ts` (new), `src/app/storage.ts`, `src/ui/menu.ts`, `src/app/game.ts` |
+| 10 | Small fixes | The touch layout uses only `(pointer: coarse)`. I removed `maximum-scale` and `user-scalable=no`; the canvas and `#app` keep `touch-action: none`. The smallest label is now 12 px, including the graph text and the engine count. The bottom split-screen labels sit above the replay bar. Cadet pin alignment scales to the tier window (3 m), so a Cadet catch inside the window always scores. | `index.html`, `src/ui/touch.ts`, `src/ui/styles.css`, `src/ui/graphs.ts`, `src/sim/scoring.ts`, `src/sim/world.ts` |
 
-### Performance
+## Test expectations that changed, and why
 
-- The Low tier gets 4 more draw calls: 2 crowd meshes, the wet sand band and the light halos. The Low budget is < 150.
-- New e2e tests measure the frame rate at Low and at Medium in flight (desktop Chromium).
-  - With a real GPU, the minimum is 55 fps.
-  - On SwiftShader, the tests record the value as an annotation and only check that the loop runs.
-- The adaptive Auto test is not changed.
+- `scoring.test.ts`:
+  - Ignition: 100 at 0 m, about 93 at 40 m, 50 at 300 m, 0 at 600 m. The old expectation (75 at 40 m, 0 at 160 m) gave 0 for a 0.5 s error.
+  - New alignment test for the tier window.
+- `tutorial.test.ts`:
+  - "A step moves on by itself" became "a step waits for the player".
+  - The "never more than 20 s" property became "a player who does each step finishes quickly".
+  - New tests for "Skip step" and for the spoken lines.
+- `input.test.ts`: in the burn, the Pilot command is now `tilt` (lean). While coasting it is still `rate`. New tests for the stick rotation.
+- `golden.test.ts`: the timeline is not changed (all times are after ignition). New test: every tier starts 2.4 to 3.1 km up, and lights more than `PREROLL` seconds into the run.
+- `render.test.ts`: new tests for camera-relative steering on all 5 cameras, the tower-top "toward the tower" rule, and the director hold from 13 s to 23 s.
+- `storage.test.ts`: the settings round-trip includes `voice`, and the default is on.
+- New `assist.test.ts`:
+  - Cadet hands-off is inside the window on at least 4 of 6 seeds.
+  - Steering on the pin offset raises the alignment points.
+  - Pilot lean command.
+  - The Pilot human bot catches on at least 3 of 5 seeds.
 
-### Captures
+## C5b: fixes after the first test run (2 failures in `assist.test.ts`)
 
-`scripts/capture.mjs` (`pnpm capture`) starts its own `vite preview` on port 4199 at the base path. It stops that server by process id, never by name. It uses Chromium with the SwiftShader flags. It writes these files to `shots/` (gitignored):
+- **Pilot bot: NO-GO on every seed.** Most likely cause: the Go/No-Go "track" check. It measured the pins from the autopilot's hold point, 30 m offshore, with a 50 m limit. A hand-flown booster more than 20 m past the tower, or more than 80 m out, was called NO-GO, although the arms were still in reach. A human hits this too. The check now measures reach from the arms (`TRACK_REACH` = 80 m), so the autopilot hold point still passes. New unit test for it. The bot report now prints the board at the poll: the red items, reach, pin position, descent speed, height, propellant (have and need), engines and phase. If a seed still fails, that line names the cause.
+- **Cadet seed 4: a steered run failed.** The test bot held stick toward the ring from the divert start. The trim had about 12 m of authority, so the booster overshot. This is also a game issue: the arrow invites that input. Fix in the sim (`cadetTrimLimit`):
+  - The trim fades out as the booster gets 2.5 m ahead of the hands-off path in the stick direction. The aim error is at most 2.2 m, so steering toward the ring reaches the centre but cannot leave the 3 m window.
+  - The trim fades out over the last 8 m of pin height, so a held stick cannot cause a sideways slide at contact.
+  - New test: full stick along the arrow from divert to contact catches on 8 of 8 seeds.
+  - The score test now uses a calm bot: it waits until the pins are within 6 m, nudges with a 0.3 m dead band, in 0.1 steps.
 
-- `gameplay.webm`: a 1280x720 recording of `?autopilot=1&tier=cadet&seed=1&quality=medium` at timescale 1. It starts with a beat on the hero menu and runs until about 2.5 s after the debrief shows. The cap is 40 s (`CAPTURE_SECONDS`).
-  - Note: a full flight from the menu to the catch is about 36 s, so the video is longer than 20 s. The catch is the best part, so I kept it.
-- `desktop-*.png`, `iphone-*.png` and `pixel-*.png`, one set per device:
-  - menu, ignition-13, stepdown-3, divert, hover, arms-closing, catch and debrief (from the `still=1` hooks)
-  - splashdown (a Pilot run with no ignition, timescale 4)
-  - replay-split (an autopilot catch, then Replay, then Split)
-- If the splashdown or replay-split shot fails, the script logs it and continues.
+## C5c: second fix pass (3 failures in `assist.test.ts`)
+
+- **Cadet: the stick no longer adds velocity.** It moves the divert aim point (`World.aim`). The autopilot always flies the booster.
+  - The aim moves at up to 1 m/s and stays within 2.2 m of the centre (window - 0.8 m). It freezes below 8 m of pin height, so the booster settles before contact.
+  - No stick input can make a Cadet slide or miss. The ghost path ends at the aim point, so the player steers that end onto the ring.
+  - Hands-off is not changed: the aim starts at the seeded offset.
+  - Tests:
+    - Steering the aim to the centre scores at least the hands-off score on every seed.
+    - Full stick toward the ring catches on 8 of 8 seeds. Full stick away from it also catches on 8 of 8.
+- **Pilot: the booster passed the tower (pin x = -44 to -84 m at the poll).**
+  - Cause: on 13 engines, the damping law (time constant 1.6 s) stopped braking hard at about 80 m/s. Then the speed decayed slowly. When the player stepped down on time (about +3 s), the booster still slid toward the tower. 3 engines (12° lean limit) could not stop it before it passed the arms.
+  - Fix: on 13 engines the flight computer now flies the guidance braking lean, and the stick adds only a 3° bias. On 3 engines, the lean-angle stick with damping stays as before.
+  - The bot now presses CATCH when the button shows, as the tip says. Its old trigger came too late for its own V/S profile, so the arms were still closing at contact ("late").
+  - The report now also prints the step-down, the state at +13 s and the CATCH press.
+
+## C5d: Pilot fairness (0 of 5): game fixes first, then the bot
+
+- **Pilot-induced oscillation.** The HUD PIN chip and the ring colour showed the raw pins, 39 m above the CoM. A few degrees of lean swing them by metres, so a player who steers on them amplifies the swing. Seed 3's 30° tilt abort at +5 s and the sign swings on the other seeds match this. The HUD now shows the upright pin offset (`uprightPinOffset`: the CoM's horizontal position, where the pins line up when the booster is upright). Scoring still uses the real pins.
+- **Lean safety (`pilotLean`):**
+  - On 13 engines, the lean allowed fades from 35° (descent ≥ 110 m/s) to 5° (≤ 70 m/s), so a step-down on the cue starts upright.
+  - Step-down interlock: the flight computer refuses a step-down while the tilt is more than 15°.
+  - On 3 engines, the lean target never exceeds 12° (the abort is 30°). Above 20° of tilt the stick is locked out until the booster is upright.
+- **Final approach hold.** Below 30 m of pin height, the velocity hold tightens (time constant 2.5 s → 1.8 s), and full stick falls from 10° to 5°. A centred stick nulls the sideways speed.
+- **Bot.**
+  - It steers on the HUD value (the upright offset) plus a lead (the sideways speed × 1.5 s), with gain 0.1, 250 ms late, with noise.
+  - It presses CATCH when the button shows.
+- **New tests:**
+  - The lean target stays at or below 12°.
+  - A large tilt locks out the stick.
+  - Step-down is refused while leaning hard.
+  - A held stick on 3 engines settles with no more than 10% overshoot.
+
+## C5e: Pilot on 3 engines (from the operator's probe)
+
+1. **Stick authority.** The 3-engine limit is now 15°. The stick owns half of it (7.5°). The velocity damping gets the rest, at least half. The sum never exceeds the limit, the damping can always out-pull a held stick, and the stick always changes the lean. Full stick settles at about 4 m/s (damping time constant 3 s).
+2. **Step-down kick.**
+   - Cause: the 13-engine lean limit faded quickly with the descent speed. The strong 13-engine attitude loop then built a rotation of about 0.5 rad/s. After the step, 3 engines could not stop it.
+   - Fix: STEP now arms an interlock (`World.stepArmed`). The 13 engines go to minimum throttle and the lean goes upright. The step happens when tilt < 8° and rate < 0.05 rad/s. If the descent falls under 15 m/s, it steps at once, so the booster never climbs.
+   - The speed fade is gone. The autopilot and FD still step at once through `cmd.stepDown`, so the golden and FD timelines do not change.
+3. **Attitude overshoot.** The Pilot lean command on 3 engines moves at 0.1 rad/s, not 0.2. With feed-forward, the faster command left a rotation that 0.3 to 0.5 rad/s² of authority could not stop.
+4. **Position at step-down.** The autopilot is not at the 30 m hold point at the step-down. It is at about 67 m (`X_STEPDOWN`), and it reaches the hold point at +13 s on 3 engines. The probe was at 90 m because it stepped at +3.2 s, 0.8 s before the plan. The 13-engine lean is the autopilot's reference lean, so I did not move the start point. That would change the golden tests.
+- **Regression tests** (from the probe, Pilot seed 5):
+  - Stick +1 vs 0 vs -1: at least 15 m apart after 8 s.
+  - |tilt| < 0.2 in the 2 s after the step-down.
+  - No tilt above 110% of the command.
+  - The speed settles with no more than 10% overshoot.
+  - The interlock arms, waits and steps.
+- **Operator:** delete `tests/unit/zz-probe.test.ts`. I had no permission to delete files this turn.
+
+## C5f: quick interlock, Pilot window, symmetric stick
+
+- **Interlock** (`World.stepArmedAt`):
+  - After STEP, the 13 engines hold the rotation rate at zero (rate mode), not the lean. The player's throttle stays.
+  - The step happens when tilt < 10° and rate < 0.1 rad/s, or after 1.0 s, or at once if the descent falls under 35 m/s.
+  - Before this fix, every seed stepped only at the 15 m/s floor. The 3-engine descent then took about 45 s and nearly used up the propellant.
+- **Pilot pin window: 2.5 m** (the rail guides). Flight Director stays at 1.5 m and Cadet at 3 m. Alignment points scale to the window, so precision still pays, and a steady 2 m approach is a catch.
+- **Final approach:** the hold time constant is 2.2 s and the fine stick is 6°. Full stick still moves the booster about 2.4 m/s, so the last 2 m close in a few seconds. Before, it was about 1.2 m/s, too slow for a player who was 2 m off at 28 m.
+- **Fixed shares on 3 engines:** the stick gets 45% of the 15° limit and the damping 55%. The stick's effect does not depend on how hard the damping brakes, so +1 and -1 are near-symmetric about hands-off. The damping can still out-pull a held stick, so the slide settles.
+- **Tests:**
+  - Spread from +1 to -1 is at least 25 m, each side more than 8 m, and roughly symmetric.
+  - A held stick reaches more than 2 m/s with no overshoot.
+  - The interlock steps at once when settled and after 1 s at most when not.
+  - The envelope boundary test now covers FD 1.5 m, Pilot 2.5 m and Cadet 3 m.
+  - The Pilot bot (V/S braking profile at 1.2 m/s²) checks ignition to contact at 26 to 38 s on caught runs. Its report shows the real pins, the CoM and the sideways speed at the end of the run.
 
 ## Commands for the operator (in order)
 
 1. `pnpm typecheck`
 2. `pnpm lint`
-3. `pnpm test`. The new safe-frame tests fly 8 autopilot runs (4 runs x 2 screens).
+3. `pnpm test`
 4. `pnpm build`
-5. Run the e2e suite without the visual tests and save the output:
+5. Run the e2e suite without the visual tests, and save the output:
 
    ```sh
    pnpm exec playwright test --grep-invert visual > .operator/e2e.txt 2>&1
    ```
 
-6. `pnpm capture`. Send me the `shots/*.png` files and tell me the video length.
-7. Regenerate the visual baselines. ALL THREE change on every project:
-   - `main-menu`: the new hero camera, ground, lights and vapour
-   - `in-flight`: the tower top at +20 s, with the plume trim, tower tone, wet sand and raceway
-   - `debrief`: no HUD strip, the new crowd and vapour
-
-   Do this only when step 5 is green and the step 6 images look right:
+6. `pnpm capture`. Send me the `shots/*.png` files and the video length. The video is about 3 s longer (the pre-roll).
+7. Regenerate the visual baselines. All three change: the new HUD chips, the ring in every tier, the grey tower and the plume colour. Do this step only when step 5 passes and the step 6 images look right:
 
    ```sh
    pnpm exec playwright test visual --update-snapshots
    ```
 
-   CAUTION: this step overwrites the committed baselines. Look at every new image before you commit.
+   CAUTION: This step overwrites the committed baselines. Look at each new image before you commit.
 8. `pnpm ci:local`
 9. Commit and push.
 
 ## Suggested commit message
 
-`polish: art and feel pass`
+`fix: gate-1 review (camera-relative steering, Cadet trim, target ring, ignition pre-roll, phone HUD, Pilot lean command, tutorial)`
 
-Body (optional): safe-frame auto-director below the HUD (+ unit test), HUD hidden on debrief, human crowd clusters, wet sand + ground tone, 3/4 hero shot with venting, near-lens plume trim + downwash ring, lighter tower with blinking lights, flush raceway, micro-shake, settle bounce, CATCH ring flash, medal pop, capture script, Low/Medium fps checks.
+## Known risks (most likely failures first)
 
-## Known open issues and risks
+- **Pilot human bot (`assist.test.ts`).** I tuned it on paper. The main risks:
+  - The booster is still 10 to 20 m off the arms when the V/S profile reaches the rails.
+  - The propellant runs low (the profile takes about 27 s on 3 engines).
 
-- **Unverified compile.** The most likely problems:
-  - The new `frameInSafe` test thresholds on portrait phones (the chase lens is fixed at 44 deg). If a safe-frame test fails, send me the failure line (shot, t, tau).
-  - The `UnrealBloomPass.strength` assignment.
-- **Tower-top safe check.** This check runs only when the booster is within 120 m of the tower. A no-go booster stays offshore, out of that lens.
-- **Wet sand.** The band uses polygon offset over the ground. If it flickers at grazing angles on some GPUs, tell me and I will raise it 5 cm more.
-- **Crowd count.** About 200 people in 4 instanced meshes (3 drawn at a time). If the Low draw-call test is close to 150, I can merge the sitters into the calm mesh.
-- **Hero shot.** I computed the tower clearance on paper (15 m). Please check `shots/desktop-menu.png`: the booster must be clear of the tower and right of the rail.
-- **Not done.** Gamepad navigation of the left menu, and a two-finger twist for roll.
+  If it fails, send me the report line. It shows the reason, time, error, speed, tilt and propellant for each seed.
+- **Flight Director robustness (≥ 16 of 20).** The extra 3 s of coast uses more of the wind random stream, so each seed gets new gusts. The rate should stay the same, but single seeds change.
+- **Cadet "stick improves the score".** The test needs a gain of at least 40 alignment points per seed on average. I expect about 100.
+- **Desktop strip width.** With the new chips the desktop strip can wrap to 2 rows on 1280 px in Pilot and FD. Check `shots/desktop-*.png`.
+- **Touch emulation.** Playwright phone projects must report `(pointer: coarse)` to get the touch layout. Chromium does this with `hasTouch`. If WebKit does not, the iPhone shots show the keyboard layout.
+- **Voice.** Some browsers fill the voice list late. If no local English voice exists, the game stays silent, by design.

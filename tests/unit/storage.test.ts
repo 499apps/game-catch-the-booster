@@ -80,9 +80,14 @@ describe('best scores per tier', () => {
 describe('settings', () => {
   it('round-trip, including volume, music, one-handed and custom keys', () => {
     const keys = rebind(presetKeys('standard'), 'catch', 'KeyB');
-    const s = { ...defaultSettings(), volume: 0.35, music: false, oneHanded: true, keyPreset: 'custom' as const, keys, tutorialDone: true };
+    const s = { ...defaultSettings(), volume: 0.35, music: false, oneHanded: true, keyPreset: 'custom' as const, keys, tutorialDone: true, voice: false };
     saveSettings(s);
     expect(loadSettings()).toEqual(s);
+  });
+  it('the voice coach is on by default, and older saves without it turn it on', () => {
+    expect(defaultSettings().voice).toBe(true);
+    mem.setItem(`${PREFIX}settings`, JSON.stringify({ volume: 0.5 }));
+    expect(loadSettings().voice).toBe(true);
   });
   it('clamp and repair bad values', () => {
     mem.setItem(`${PREFIX}settings`, JSON.stringify({ volume: 7, quality: 'ultra', tier: 'boss', keyPreset: 'weird', muted: 'yes' }));

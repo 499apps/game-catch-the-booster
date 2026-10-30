@@ -39,6 +39,10 @@ export interface FlightCommand {
   closeArms: boolean;
   go: boolean;
   noGo: boolean;
+  /** Cadet: how fast the stick moves the divert aim point (m/s, world x/z). */
+  aimRate?: Vec2;
+  /** Pilot: ask for the step-down; it happens when the interlock allows (world.ts). */
+  stepArm?: boolean;
 }
 
 export type EngineMode = 'off' | 'spooling' | 'lit' | 'failed';
@@ -188,7 +192,11 @@ export interface World {
   faults: { towerSensor: boolean };
   ignition: IgnitionSnapshot | null;
   tStepDown: number | null;
+  /** Sim time the Pilot asked for the step-down (null: not asked); see the interlock in world.ts. */
+  stepArmedAt: number | null;
   flags: { divert: boolean; counterBurn: boolean; hover: boolean; catchPrompt: boolean };
+  /** Cadet: where the divert aims the pins (m from the arm centreline); the stick moves it. */
+  aim: Vec2;
   contact: ContactInfo | null;
   outcome: Outcome | null;
   events: SimEvent[];

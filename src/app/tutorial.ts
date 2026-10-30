@@ -1,14 +1,15 @@
 // Cadet first-run tutorial: a pure state machine (no DOM), so it is unit-testable.
 // Teach by doing, one idea at a time: steer, light, catch. Each step waits for the
-// player to do it, praises it briefly, then moves on. A step that the player does not
-// do moves on by itself, so the whole tutorial never takes more than ~20 s.
+// player to do it, praises it briefly, then moves on. Nothing moves on by itself: after
+// STEP_HINT seconds the card offers "Skip step", and "Skip tutorial" is always there.
+// During the steer step the game flies a practice (ghost) booster with the real sim.
 
 export type TutorialStep = 'steer' | 'light' | 'catch' | 'ready' | 'done';
 
 export const TUTORIAL_STEPS: readonly TutorialStep[] = ['steer', 'light', 'catch', 'ready', 'done'];
 
-/** Seconds before an unanswered step moves on by itself. */
-export const STEP_TIMEOUT = 5;
+/** Seconds in a step before the card offers "Skip step" and a hint. */
+export const STEP_HINT = 6;
 /** Seconds of "Nice!" after the player does the step. */
 export const PRAISE_TIME = 0.8;
 /** Seconds the closing "Ready" card shows. */
@@ -16,8 +17,6 @@ export const READY_TIME = 1.6;
 /** Stick deflection that counts as steering, and for how long. */
 export const STEER_MIN = 0.45;
 export const STEER_TIME = 0.35;
-/** Upper bound of the whole tutorial. */
-export const TUTORIAL_MAX_SECONDS = 3 * (STEP_TIMEOUT + PRAISE_TIME) + READY_TIME;
 
 export interface TutorialInput {
   /** Stick deflection 0..1. */
@@ -34,7 +33,7 @@ export class Tutorial {
   total = 0;
   /** > 0 while the step shows its praise. */
   praise = 0;
-  /** Steps the player did (not timed out). */
+  /** Steps the player did (not skipped). */
   readonly done = new Set<TutorialStep>();
   skipped = false;
   private steerAcc = 0;
@@ -43,15 +42,26 @@ export class Tutorial {
     return this.step === 'done';
   }
 
-  /** 0..1 progress of the auto-advance timer for the current step. */
-  get timeout(): number {
-    const limit = this.step === 'ready' ? READY_TIME : STEP_TIMEOUT;
-    return Math.min(1, this.t / limit);
+  /** True once the step has waited long enough to offer a skip and a hint. */
+  get hint(): boolean {
+    return this.step !== 'ready' && this.praise <= 0 && this.t >= STEP_HINT;
   }
 
+  /** 0..1 of the closing card's timer (the other steps wait for the player). */
+  get timeout(): number {
+    return this.step === 'ready' ? Math.min(1, this.t / READY_TIME) : 0;
+  }
+
+  /** Ends the whole tutorial. */
   skip(): void {
     this.skipped = true;
     this.go('done');
+  }
+
+  /** Moves on from the current step without doing it. */
+  skipStep(): void {
+    if (this.finished) return;
+    this.next();
   }
 
   private go(s: TutorialStep): void {
@@ -98,8 +108,6 @@ export class Tutorial {
     if (did) {
       this.done.add(this.step);
       this.praise = PRAISE_TIME;
-    } else if (this.t >= STEP_TIMEOUT) {
-      this.next();
     }
     return this.step !== before;
   }

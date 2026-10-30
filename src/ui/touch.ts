@@ -3,9 +3,13 @@
 import type { InputDevices } from '../input/devices';
 import { el } from './dom';
 
+/**
+ * True when the main pointer is coarse (a finger). A touch-capable laptop with a mouse or
+ * trackpad reports `maxTouchPoints > 0` but a fine pointer, and keeps the keyboard layout.
+ */
 export function isTouchDevice(): boolean {
   try {
-    return window.matchMedia('(pointer: coarse)').matches || (navigator.maxTouchPoints || 0) > 0;
+    return window.matchMedia('(pointer: coarse)').matches;
   } catch {
     return false;
   }

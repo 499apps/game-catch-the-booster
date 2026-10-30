@@ -1,4 +1,5 @@
 // Scoring (design doc section 7): 1000 points + bonuses, medals.
+import { PIN_WINDOW } from './constants';
 import { clamp01 } from './vec';
 
 export const MAX = {
@@ -15,9 +16,12 @@ export const BONUS_ENGINE_OUT = 100;
 export const BONUS_WIND_MASTER = 100;
 export const WIND_MASTER_MIN = 6; // m/s mean wind
 
-/** 300 at 0 m, 0 at 1.5 m and beyond. */
-export function alignmentScore(err: number): number {
-  return MAX.alignment * clamp01(1 - Math.abs(err) / 1.5);
+/**
+ * 300 at 0 m, 0 at the edge of the tier's pin window and beyond (1.5 m in Pilot and
+ * Flight Director, wider in Cadet), so a catch inside the window always earns points.
+ */
+export function alignmentScore(err: number, window = PIN_WINDOW): number {
+  return MAX.alignment * clamp01(1 - Math.abs(err) / Math.max(window, 1e-6));
 }
 
 /** 250 below 0.5 m/s, 125 at 2 m/s, 0 at 4 m/s and beyond (piecewise linear). */
@@ -47,9 +51,14 @@ export function fuelScore(tonnes: number): number {
   return Math.max(0, MAX.fuel - 5 * (t - 15));
 }
 
-/** 100 at 0 m from the ideal ignition point, 75 at 40 m ("pro"), 0 at 160 m. */
+/** m of ignition-height error at which the ignition points reach 0. */
+export const IGNITION_ZERO = 600;
+/**
+ * 100 at 0 m from the ideal ignition point, falling linearly to 0 at 600 m. The booster
+ * falls ~300 m/s, so 40 m ("pro") is ~93 and a whole second early or late (~300 m) is ~50.
+ */
 export function ignitionScore(err: number): number {
-  return MAX.ignition * clamp01(1 - Math.abs(err) / 160);
+  return MAX.ignition * clamp01(1 - Math.abs(err) / IGNITION_ZERO);
 }
 
 /** 25 for tilt (0 at 2 deg) + 25 for lateral speed (0 at 1 m/s). */
@@ -71,6 +80,8 @@ export function medalFor(base: number, pinError: number, caught: boolean): Medal
 export interface ScoreInput {
   caught: boolean;
   pinError: number;
+  /** The tier's pin window (m); defaults to the 1.5 m Pilot / Flight Director window. */
+  pinWindow?: number;
   contactSpeed: number;
   peakLoadG: number;
   propellantKg: number;
@@ -107,7 +118,7 @@ export function scoreRun(s: ScoreInput): ScoreBreakdown {
     };
   }
   const parts = {
-    alignment: alignmentScore(s.pinError),
+    alignment: alignmentScore(s.pinError, s.pinWindow),
     contactSpeed: contactSpeedScore(s.contactSpeed),
     load: loadScore(s.peakLoadG),
     fuel: fuelScore(s.propellantKg / 1000),

@@ -8,11 +8,14 @@ import {
   THROTTLE_LEVER_RATE,
   deadzone,
   emptyIntent,
+  lerpAngle,
   mapGamepad,
   mapKeyboard,
   mapTouch,
   mergeIntents,
   rateLimit,
+  rotateStick,
+  worldToScreen,
   type PadState,
   type RawIntent,
 } from '../../src/input/mapping';
@@ -137,16 +140,52 @@ describe('smoothing and rate limits', () => {
   });
 });
 
+describe('camera-relative stick math', () => {
+  it('yaw 0 is the identity; rotation keeps the length; worldToScreen undoes it (property)', () => {
+    expect(rotateStick(0.3, -0.7, 0)).toEqual([0.3, -0.7]);
+    fc.assert(
+      fc.property(
+        fc.double({ min: -1, max: 1, noNaN: true }),
+        fc.double({ min: -1, max: 1, noNaN: true }),
+        fc.double({ min: -7, max: 7, noNaN: true }),
+        (x, z, yaw) => {
+          const [wx, wz] = rotateStick(x, z, yaw);
+          expect(Math.hypot(wx, wz)).toBeCloseTo(Math.hypot(x, z), 9);
+          const [sx, sz] = worldToScreen(wx, wz, yaw);
+          expect(sx).toBeCloseTo(x, 9);
+          expect(sz).toBeCloseTo(z, 9);
+        },
+      ),
+    );
+  });
+  it('a camera turned half round (looking +z) mirrors both axes', () => {
+    const [x, z] = rotateStick(1, 0, Math.PI);
+    expect(x).toBeCloseTo(-1, 9);
+    expect(z).toBeCloseTo(0, 9);
+  });
+  it('lerpAngle takes the short way round', () => {
+    expect(lerpAngle(3, -3, 0.5)).toBeCloseTo(3 + (2 * Math.PI - 6) / 2, 9);
+    expect(lerpAngle(0.2, 0.6, 0.5)).toBeCloseTo(0.4, 9);
+    expect(lerpAngle(1, 2, 1)).toBeCloseTo(2, 9);
+  });
+});
+
 describe('input -> flight command', () => {
   it('lever maps to 40%..100% throttle', () => {
     expect(leverToThrottle(0)).toBe(0.4);
     expect(leverToThrottle(1)).toBe(1);
   });
-  it('Pilot uses rate damping, Flight Director direct gimbal, Cadet attitude hold', () => {
+  it('Pilot: rate nudge while coasting, lean command in the burn; Flight Director direct gimbal; Cadet attitude hold', () => {
     expect(TIER_CONFIG.pilot.control).toBe('pilot');
-    const pilot = commandFor(createWorld(1, 'pilot'), { ...NEUTRAL_INPUT, stickX: 1 }, false);
+    const pw = createWorld(1, 'pilot');
+    const pilot = commandFor(pw, { ...NEUTRAL_INPUT, stickX: 1 }, false);
     expect(pilot.attitude).toBe('rate');
     expect(pilot.target.x).toBeGreaterThan(0);
+    pw.phase = 'burn13';
+    pw.vel = { x: 0, y: -100, z: 0 };
+    const lean = commandFor(pw, { ...NEUTRAL_INPUT, stickX: 1 }, false);
+    expect(lean.attitude).toBe('tilt');
+    expect(lean.target.x).toBeGreaterThan(0);
     const fd = commandFor(createWorld(1, 'fd'), { ...NEUTRAL_INPUT, stickX: 1 }, false);
     expect(fd.attitude).toBe('direct');
     const cadet = commandFor(createWorld(1, 'cadet'), NEUTRAL_INPUT, false);

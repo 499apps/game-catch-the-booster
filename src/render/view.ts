@@ -11,6 +11,7 @@ import type { QualityProfile } from './quality';
 import { WorldScene, type FrameState } from './scene';
 import { makeSkyMaterial } from './materials';
 import { FinishPass } from './post';
+import { TOWER_HEIGHT, TOWER_X } from '../sim/constants';
 
 /** three.js r170 needs WebGL2. Probe first so a missing context logs no console error. */
 export function hasWebGL2(): boolean {
@@ -148,15 +149,27 @@ export class View {
     for (const id of CAMERA_IDS) this.rigs[id].reset();
   }
 
-  /** Screen-space engine glare for this camera (0 when off screen or not burning). */
-  private flare(cam: THREE.PerspectiveCamera, id: CameraId): { x: number; y: number; k: number } {
+  /**
+   * Screen-space engine glare for this camera (0 when off screen or not burning). The glow
+   * follows the plume, except on the wide and beach lenses, where only the ignition flash
+   * flares. The streak and the ghosts come from the ignition flash only.
+   */
+  private flare(cam: THREE.PerspectiveCamera, id: CameraId): { x: number; y: number; glow: number; streak: number } {
     const w = this.world;
-    if (w.plumeLevel <= 0) return { x: 0.5, y: 0.5, k: 0 };
+    if (w.plumeLevel <= 0) return { x: 0.5, y: 0.5, glow: 0, streak: 0 };
     const p = w.enginePoint(this.tmp).project(cam);
-    if (p.z > 1 || p.z < -1) return { x: 0.5, y: 0.5, k: 0 };
+    if (p.z > 1 || p.z < -1) return { x: 0.5, y: 0.5, glow: 0, streak: 0 };
     const edge = Math.max(Math.abs(p.x), Math.abs(p.y));
-    const vis = 1 - THREE.MathUtils.smoothstep(edge, 0.9, 1.15);
-    return { x: p.x * 0.5 + 0.5, y: p.y * 0.5 + 0.5, k: vis * w.plumeLevel * FLARE_BY_CAM[id] * (1 + w.flash) };
+    const vis = (1 - THREE.MathUtils.smoothstep(edge, 0.9, 1.15)) * FLARE_BY_CAM[id];
+    const glow = id === 'beach' || id === 'wide' ? vis * w.flash : vis * w.plumeLevel * (1 + w.flash);
+    return { x: p.x * 0.5 + 0.5, y: p.y * 0.5 + 0.5, glow, streak: vis * w.flash };
+  }
+
+  /** Where the tower top is on screen (uv), so the flare ghosts stay off it. */
+  private towerMask(cam: THREE.PerspectiveCamera): { x: number; y: number } {
+    const p = this.tmp.set(TOWER_X, TOWER_HEIGHT + 6, 0).project(cam);
+    if (p.z > 1 || p.z < -1) return { x: -9, y: -9 };
+    return { x: p.x * 0.5 + 0.5, y: p.y * 0.5 + 0.5 };
   }
 
   render(frame: FrameState, cam: CameraId, shot: ShotInput, dt: number, snap: boolean, pip: { cam: CameraId; rect: PipRect } | null): void {
@@ -168,29 +181,39 @@ export class View {
     rig.update(shot, dt, snap);
     // A plume close to the lens: less bloom and streak, so the core and diamonds still read.
     const near = this.world.tuneForCamera(rig.camera.position);
-    if (this.bloom) this.bloom.strength = this.bloomBase * (1 - 0.6 * near);
-
-    // Exposure pump: the ignition flash blows out, then the "camera" adapts to the bright plume.
+    // Thirteen engines: less bloom, so the big flame keeps its colour instead of going white.
     const w = this.world;
+    if (this.bloom) this.bloom.strength = this.bloomBase * (1 - 0.6 * near) * (w.plumeMany ? 0.6 : 1);
+
+    // Exposure pump: the ignition flash blows out, then the "camera" adapts to the bright
+    // plume (more for the thirteen-engine burn).
+    const pump = w.plumeMany ? 0.5 : 0.25;
     if (frame.reducedMotion || snap) {
       this.adapt = frame.reducedMotion ? 0 : w.plumeLevel;
-      this.renderer.toneMappingExposure = BASE_EXPOSURE / (1 + 0.25 * this.adapt);
+      this.renderer.toneMappingExposure = BASE_EXPOSURE / (1 + pump * this.adapt);
     } else {
       this.adapt += (w.plumeLevel - this.adapt) * (1 - Math.exp(-dt / 1.2));
-      this.renderer.toneMappingExposure = (BASE_EXPOSURE * (1 + 0.7 * w.flash)) / (1 + 0.25 * this.adapt);
+      this.renderer.toneMappingExposure = (BASE_EXPOSURE * (1 + 0.7 * w.flash)) / (1 + pump * this.adapt);
     }
 
     if (this.composer && this.renderPass && this.finish) {
       this.renderPass.camera = rig.camera;
       const fl = this.flare(rig.camera, cam);
+      const mask = this.towerMask(rig.camera);
       const t = frame.t;
+      const trim = 1 - 0.75 * near;
       this.finish.set({
         time: t,
         aspect,
         shimmer: cam === 'beach' ? 1 : cam === 'wide' ? 0.5 : 0,
-        flare: fl.k * (1 - 0.75 * near),
+        flare: fl.glow * trim,
+        streak: fl.streak * trim,
+        ghost: fl.streak * trim,
         flareX: fl.x,
         flareY: fl.y,
+        maskX: mask.x,
+        maskY: mask.y,
+        maskR: 0.09,
         grain: frame.reducedMotion ? 0.015 : 0.03,
         vignette: 0.12, // the CSS overlay adds the rest on every tier
       });

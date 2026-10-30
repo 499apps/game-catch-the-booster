@@ -120,6 +120,7 @@ export class Menu {
   private readonly music: HTMLButtonElement;
   private readonly reduced: HTMLButtonElement;
   private readonly oneHand: HTMLButtonElement;
+  private readonly voice: HTMLButtonElement;
   private readonly preset: HTMLSelectElement;
   private readonly keyBtns = new Map<KeyAction, HTMLButtonElement>();
   private readonly cleared = el('div', { class: 'sub', 'data-testid': 'cleared' });
@@ -160,7 +161,7 @@ export class Menu {
     }
     const start = el('button', { class: 'btn primary', 'data-testid': 'start-btn', text: 'Start: Final Approach' });
     start.addEventListener('click', () => this.h.onStart(this.tier));
-    const tut = el('button', { class: 'btn', 'data-testid': 'tutorial-btn', text: 'Practice: 20-second tutorial' });
+    const tut = el('button', { class: 'btn', 'data-testid': 'tutorial-btn', text: 'Practice: short tutorial' });
     tut.addEventListener('click', () => this.h.onTutorial());
     this.play = el('section', { 'data-testid': 'play-section' }, [
       el('h2', { text: 'Play: Final Approach' }),
@@ -246,6 +247,8 @@ export class Menu {
     this.reduced.addEventListener('click', () => this.update({ reducedMotion: !this.settings.reducedMotion }));
     this.oneHand = el('button', { class: 'toggle', 'data-testid': 'one-handed', 'aria-label': 'One-handed touch controls' });
     this.oneHand.addEventListener('click', () => this.update({ oneHanded: !this.settings.oneHanded }));
+    this.voice = el('button', { class: 'toggle', 'data-testid': 'voice', 'aria-label': 'Voice coach (Cadet)' });
+    this.voice.addEventListener('click', () => this.update({ voice: !this.settings.voice }));
     this.preset = el('select', { 'data-testid': 'key-preset', 'aria-label': 'Key layout' });
     for (const [v, label] of [
       ['standard', 'Standard'],
@@ -285,6 +288,8 @@ export class Menu {
       el('div', { class: 'row' }, ['Music', this.music]),
       el('div', { class: 'row' }, ['Reduced motion', this.reduced]),
       el('div', { class: 'row' }, ['One-handed touch', this.oneHand]),
+      el('div', { class: 'row' }, ['Voice coach (Cadet)', this.voice]),
+      el('div', { class: 'sub', text: 'Uses an offline voice of this device. With no offline voice, the coach is text only.' }),
       el('label', { class: 'row' }, ['Keys', this.preset]),
       keysBox,
       clear,
@@ -343,6 +348,8 @@ export class Menu {
     this.reduced.textContent = s.reducedMotion ? 'On' : 'Off';
     this.oneHand.setAttribute('aria-pressed', String(s.oneHanded));
     this.oneHand.textContent = s.oneHanded ? 'On' : 'Off';
+    this.voice.setAttribute('aria-pressed', String(s.voice));
+    this.voice.textContent = s.voice ? 'On' : 'Off';
     this.preset.value = s.keyPreset;
     for (const [a, b] of this.keyBtns) {
       if (this.capture?.action === a) continue;

@@ -859,16 +859,17 @@ export function makeHullTextures(): HullTextures {
   return { map: tex(cc, true), roughMetal: tex(rc, false), normal: tex(nc, false), glow: tex(gc, false) };
 }
 
-/** Dark lattice steel for the tower and arms: rust-tinted panels with highlights on edges. */
+/** Weathered lattice steel for the tower and arms: neutral grey panels with paler wear streaks. */
 export function makeSteelTexture(): THREE.CanvasTexture {
   const S = 128;
   const [c, ctx] = canvas(S, S);
-  ctx.fillStyle = '#4a4744';
+  ctx.fillStyle = '#5a5d60';
   ctx.fillRect(0, 0, S, S);
   const rnd = lcg(5);
   for (let i = 0; i < 400; i++) {
-    const g = 60 + Math.floor(rnd() * 40);
-    ctx.fillStyle = `rgba(${g + 8},${g},${g - 6},0.25)`;
+    const g = 70 + Math.floor(rnd() * 50);
+    // Grey, a touch cool: no red or brown cast.
+    ctx.fillStyle = `rgba(${g},${g + 2},${g + 5},0.25)`;
     ctx.fillRect(rnd() * S, rnd() * S, 2 + rnd() * 10, 1 + rnd() * 3);
   }
   const t = new THREE.CanvasTexture(c);

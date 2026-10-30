@@ -15,6 +15,17 @@ export function pinHeightAboveRails(pos: Vec3, tilt: Vec2): number {
   return pinPosition(pos, tilt).y - RAIL_Y;
 }
 
+/**
+ * Where the pins will be, sideways, once the booster stands upright: the CoM's horizontal
+ * position (m from the arm centreline). The HUD shows this, not the raw pins. A lean of a
+ * few degrees swings the raw pins (39 m above the CoM) by metres, and a player who chases
+ * that swing makes it worse (pilot-induced oscillation). At contact the booster is within
+ * 2 deg of upright, so the two agree to about a metre.
+ */
+export function uprightPinOffset(pos: Vec3): { x: number; z: number } {
+  return { x: pos.x, z: pos.z };
+}
+
 /** Horizontal distance of the pins from the arm centreline (m). */
 export function pinLateralError(pos: Vec3, tilt: Vec2): number {
   const p = pinPosition(pos, tilt);

@@ -1,7 +1,8 @@
 // Golden-trajectory tests: the deterministic autopilot must reproduce the real catch timeline
-// (docs/design.md "What the footage shows"). Times are seconds after landing-burn ignition.
+// (docs/design.md "What the footage shows"). Times are seconds after landing-burn ignition;
+// the run itself starts PREROLL s earlier (the 3-2-1 ignition cue), which these do not change.
 import { describe, expect, it } from 'vitest';
-import { RAD, TIER_CONFIG, type TierId } from '../../src/sim';
+import { PREROLL, RAD, TIER_CONFIG, createWorld, type TierId } from '../../src/sim';
 import { flyAutopilot, timeline } from './helpers';
 
 const SEEDS = [1, 2, 3, 4, 5, 6];
@@ -62,6 +63,21 @@ describe('golden timeline (autopilot)', () => {
       it(`${TIER_CONFIG[tier].name}, seed ${seed}`, () => expectGoldenTimeline(seed, tier));
     }
   }
+
+  it('every tier starts higher, with room for the 3-2-1 cue before the ideal ignition', () => {
+    for (const tier of ['cadet', 'pilot', 'fd'] as TierId[]) {
+      for (const seed of [1, 2, 3]) {
+        const w0 = createWorld(seed, tier);
+        // ~2.5-3 km up (CoM) and > 3 s of coast before the ideal ignition point.
+        expect(w0.pos.y, `${tier} ${seed}`).toBeGreaterThan(2400);
+        expect(w0.pos.y, `${tier} ${seed}`).toBeLessThan(3100);
+        const { world: w } = flyAutopilot(seed, tier);
+        expect(w.ignition, `${tier} ${seed}`).not.toBeNull();
+        expect(w.ignition!.t, `${tier} ${seed}`).toBeGreaterThan(PREROLL);
+        expect(w.ignition!.t, `${tier} ${seed}`).toBeLessThan(PREROLL + 2.5);
+      }
+    }
+  });
 
   it('Cadet default arm close is 5.0 s', () => {
     const { world: w } = flyAutopilot(1, 'cadet');

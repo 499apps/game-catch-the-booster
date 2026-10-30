@@ -70,6 +70,33 @@ const expK = (dt: number, tau: number): number => (tau <= 0 ? 1 : 1 - Math.exp(-
 const DEG = 180 / Math.PI;
 
 /**
+ * Stick yaw (rad) for a camera with view direction `fwd` and up vector `up`: the ground
+ * direction that looks "up the screen" (into the scene) is g = (-sin yaw, -cos yaw), and
+ * screen-right is g turned 90 deg clockwise from above. A level camera looking along -z
+ * has yaw 0 (stick right = world +x). Works for lenses pitched up, down or straight down.
+ */
+export function stickYawFrom(fwd: Vec3, up: Vec3): number {
+  // Pitched down, the up vector leans into the scene; pitched up, it leans back toward us.
+  const k = fwd.y < 0 ? 1 : -1;
+  let gx = fwd.x + k * up.x;
+  let gz = fwd.z + k * up.z;
+  if (Math.hypot(gx, gz) < 1e-9) {
+    gx = 0;
+    gz = -1;
+  }
+  return Math.atan2(-gx, -gz);
+}
+
+const tmpF = new THREE.Vector3();
+const tmpU = new THREE.Vector3();
+/** Stick yaw of a three.js camera (from its orientation). */
+export function stickYawOf(cam: THREE.Camera): number {
+  tmpF.set(0, 0, -1).applyQuaternion(cam.quaternion);
+  tmpU.set(0, 1, 0).applyQuaternion(cam.quaternion);
+  return stickYawFrom(tmpF, tmpU);
+}
+
+/**
  * Aim and vertical fov that put every point inside the safe band of the frame:
  * below the top `top` fraction (the HUD) and above the bottom `bottom` fraction.
  * The lens is clamped to [minFov, maxFov] (deg); with a fixed lens it only re-aims.
@@ -324,11 +351,17 @@ export class CameraRig {
   }
 }
 
-/** Picks the main shot by flight phase, holding each shot at least a few seconds. */
+/**
+ * Picks the main shot by flight phase, holding each shot at least a few seconds. While the
+ * player steers during the divert (STEER_HOLD) it holds the current shot: a cut would turn
+ * the camera-relative stick under the player's thumb.
+ */
 export class AutoDirector {
   current: CameraId = 'wide';
   private since = -1e9;
   static readonly MIN_HOLD = 2.5;
+  /** Seconds after ignition in which a steering player keeps the current shot. */
+  static readonly STEER_HOLD: readonly [number, number] = [13, 23];
 
   reset(): void {
     this.current = 'wide';
@@ -347,11 +380,16 @@ export class AutoDirector {
     return 'beach';
   }
 
-  /** Returns the camera to show at sim time t. Cuts immediately on phase ends. */
-  update(phase: Phase, tau: number | null, armsClosing: boolean, tDone: number | null, t: number): CameraId {
+  /**
+   * Returns the camera to show at sim time t. Cuts immediately on phase ends. `steering`:
+   * the player is on the stick, so no cut between STEER_HOLD[0] and STEER_HOLD[1].
+   */
+  update(phase: Phase, tau: number | null, armsClosing: boolean, tDone: number | null, t: number, steering = false): CameraId {
     const want = this.desired(phase, tau, armsClosing, tDone, t);
     const urgent = phase === 'splashdown' || phase === 'caught' || armsClosing;
-    if (want !== this.current && (urgent || t - this.since >= AutoDirector.MIN_HOLD)) {
+    const [h0, h1] = AutoDirector.STEER_HOLD;
+    const hold = steering && tau !== null && tau >= h0 && tau < h1;
+    if (want !== this.current && (urgent || (!hold && t - this.since >= AutoDirector.MIN_HOLD))) {
       this.current = want;
       this.since = t;
     }

@@ -45,7 +45,7 @@ export function drawFlightGraphs(canvas: HTMLCanvasElement, s: FlightSeries, mar
   const yAlt = (v: number): number => pad.t + plotH - (v / altMax) * plotH;
   const ySpd = (v: number): number => pad.t + plotH - (v / spdMax) * plotH;
 
-  ctx.font = '10px ui-monospace, Menlo, Consolas, monospace';
+  ctx.font = '12px ui-monospace, Menlo, Consolas, monospace';
   ctx.lineWidth = 1;
   // Grid and axes labels.
   ctx.strokeStyle = GRID;

@@ -48,6 +48,10 @@ const MAX_PARTICLES = 1400;
 const OUTER_ENGINES = 20;
 const BASE_Y = -COM_ABOVE_BASE; // engine plane in booster coordinates
 const TOP_Y = BOOSTER_LENGTH - COM_ABOVE_BASE;
+/** The target ring geometry has this radius; it is scaled to the hull radius + pin window. */
+const RING_UNIT = 6;
+/** Ring tint per tolerance: in the window, near its edge, outside it. */
+const RING_TONE: Record<FrameState['aids']['tone'], string> = { ok: '#5fffd0', warn: '#ffd25e', bad: '#ff8a7a' };
 
 /** Engine layout in the base plane (x, z), index 0-2 = centre engines. */
 export function engineLayout(): [number, number][] {
@@ -73,8 +77,20 @@ export interface FrameState {
   thrustFrac: number; // total thrust / (13 x full)
   armProgress: number;
   railCompression: number;
-  /** Cadet aids; `flash` 0..1 flashes the target ring when CATCH is pressed. */
-  aids: { show: boolean; ghost: Vec3[]; pinGhost: Vec3 | null; ringRadius: number; flash: number };
+  /**
+   * Flight aids. `ring`: the target ring around the arm centreline (every tier), radius =
+   * hull radius + pin window, tinted by `tone`. `show`: the Cadet ghost path and pin ghost.
+   * `flash` 0..1 flashes the ring when CATCH is pressed.
+   */
+  aids: {
+    show: boolean;
+    ring: boolean;
+    ghost: Vec3[];
+    pinGhost: Vec3 | null;
+    ringRadius: number;
+    flash: number;
+    tone: 'ok' | 'warn' | 'bad';
+  };
   splash: { active: boolean; progress: number; at: Vec3 } | null;
   reducedMotion: boolean;
   /** 0..1: held in the arms. Cold vapour vents from the booster and the crowd cheers. */
@@ -138,6 +154,8 @@ export class WorldScene {
   readonly booster = new THREE.Group();
   /** Ignition flash 0..1 (drives the exposure pump in the view). */
   flash = 0;
+  /** True while more than three engines burn (the view lowers bloom and exposure). */
+  plumeMany = false;
   /** Plume brightness 0..1 (for the lens flare and exposure). */
   plumeLevel = 0;
   private readonly sky: THREE.ShaderMaterial;
@@ -392,13 +410,16 @@ export class WorldScene {
     this.particles.renderOrder = 5;
     s.add(this.particles);
 
-    // ---- Cadet aids ----
+    // ---- Aids: the target ring (every tier) and the Cadet ghost path ----
+    // Drawn over everything (no depth test, last), so it reads around the hull and the arms.
     this.ring = new THREE.Mesh(
-      new THREE.TorusGeometry(3, 0.25, 8, 64),
-      new THREE.MeshBasicMaterial({ color: '#5fffd0', transparent: true, opacity: 0.85, depthWrite: false, fog: false }),
+      new THREE.TorusGeometry(RING_UNIT, RING_UNIT * 0.06, 8, 96),
+      new THREE.MeshBasicMaterial({ color: '#5fffd0', transparent: true, opacity: 0.85, depthWrite: false, depthTest: false, fog: false }),
     );
     this.ring.rotation.x = Math.PI / 2;
     this.ring.position.set(0, RAIL_Y + 0.4, 0);
+    this.ring.renderOrder = 20;
+    this.ring.frustumCulled = false;
     s.add(this.ring);
     const lg = new THREE.BufferGeometry();
     lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(64 * 3), 3));
@@ -701,9 +722,9 @@ export class WorldScene {
   private buildTower(): void {
     const s = this.scene;
     const steelMap = makeSteelTexture();
-    // Weathered grey steel, not black: light enough that the low sun rims the edges and the
-    // sky shows in the grazing reflections.
-    const steel = new THREE.MeshStandardMaterial({ color: '#b2aca4', map: steelMap, metalness: 0.4, roughness: 0.58, envMapIntensity: 1.25 });
+    // Weathered grey steel (a cool, neutral grey: never brown, not black). Light enough that
+    // the low sun rims the edges and the sky shows in the grazing reflections.
+    const steel = new THREE.MeshStandardMaterial({ color: '#aeb2b6', map: steelMap, metalness: 0.4, roughness: 0.58, envMapIntensity: 1.25 });
     const half = TOWER_W / 2;
     const stat: THREE.BufferGeometry[] = [];
     for (const [dx, dz] of [
@@ -826,7 +847,7 @@ export class WorldScene {
     s.add(halos);
 
     // Arms: pivot at the carriage, beam along +x when closed; truss, rail, bumper, hydraulics.
-    const armMat = new THREE.MeshStandardMaterial({ color: '#a39d95', map: steelMap, metalness: 0.45, roughness: 0.55, envMapIntensity: 1.2 });
+    const armMat = new THREE.MeshStandardMaterial({ color: '#a2a6aa', map: steelMap, metalness: 0.45, roughness: 0.55, envMapIntensity: 1.2 });
     const railMat = new THREE.MeshStandardMaterial({ color: '#c9a640', metalness: 0.4, roughness: 0.5 });
     const bumperMat = new THREE.MeshStandardMaterial({ color: '#e3ddcf', roughness: 0.85 });
     const lampMat = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(4, 3.6, 3), fog: false });
@@ -1021,25 +1042,28 @@ export class WorldScene {
     const cu = this.coreMat.uniforms;
     eu['uTime']!.value = f.t * tm;
     cu['uTime']!.value = f.t * tm;
+    this.plumeMany = many;
     if (many) {
+      // Thirteen engines: a big flame, held below white so it keeps its colour. The edge is
+      // a saturated yellow-orange (almost no blue), the core a warm gold.
       const w = (0.55 + 0.45 * (lit / ENGINE_COUNT)) * spread;
       this.envelope.scale.set(15 * w, 70 + 25 * heat, 15 * w);
-      eu['uIntensity']!.value = (0.55 + 0.5 * heat) * (1 + this.flash * 1.5);
+      eu['uIntensity']!.value = (0.42 + 0.36 * heat) * (1 + this.flash * 1.5);
       eu['uChaos']!.value = 1;
-      (eu['uCore']!.value as THREE.Color).setRGB(1.7, 1.2, 0.62);
-      (eu['uEdge']!.value as THREE.Color).setRGB(1.25, 0.46, 0.1);
+      (eu['uCore']!.value as THREE.Color).setRGB(1.45, 1.02, 0.42);
+      (eu['uEdge']!.value as THREE.Color).setRGB(1.3, 0.62, 0.05);
       cu['uDiamonds']!.value = 0.35;
       cu['uCells']!.value = 4;
-      cu['uIntensity']!.value = 0.8 + 0.4 * heat;
+      cu['uIntensity']!.value = 0.62 + 0.3 * heat;
     } else {
-      // Three engines: a tight hot pillar, white-gold core falling off to orange, with
-      // clear shock diamonds.
+      // Three engines: a tight hot pillar, white-gold core falling off to orange. A dimmer
+      // shell lets the shock diamonds (Mach disks) read clearly.
       this.envelope.scale.set(3.6 * spread, 62 + 10 * heat, 3.6 * spread);
-      eu['uIntensity']!.value = (0.42 + 0.28 * heat) * (1 + this.flash);
+      eu['uIntensity']!.value = (0.3 + 0.2 * heat) * (1 + this.flash);
       eu['uChaos']!.value = 0.25;
       (eu['uCore']!.value as THREE.Color).setRGB(1.8, 1.35, 0.85);
       (eu['uEdge']!.value as THREE.Color).setRGB(1.35, 0.55, 0.2);
-      cu['uDiamonds']!.value = 1.35;
+      cu['uDiamonds']!.value = 2.4;
       cu['uCells']!.value = 6.5 + 0.4 * Math.sin(f.t * 5.3 * tm);
       cu['uIntensity']!.value = 0.95 + 0.35 * heat;
     }
@@ -1197,12 +1221,14 @@ export class WorldScene {
       const count = Math.floor(this.particleCount * 0.6 * motion);
       emit(count, sp.at.x, 0, sp.at.z, 70, 30, 14, 0.5 * s, [0.95, 0.97, 1.0], 0.22, 5000);
     }
-    // Held in the arms: cold vapour vents near the top and sinks from the engine bay.
+    // Held in the arms: thin cold vapour vents near the top and sinks from the engine bay.
+    // Dim grey and mostly transparent: the sun lights it, so a bright tint reads as a
+    // glowing white bar on the hull.
     if (f.vent > 0 && !sp?.active) {
-      const vc = Math.floor(Math.min(90, this.particleCount * 0.12) * (f.reducedMotion ? 0.5 : 1));
+      const vc = Math.floor(Math.min(70, this.particleCount * 0.1) * (f.reducedMotion ? 0.5 : 1));
       const topY = TOP_Y - 1.5;
-      emit(vc, f.pos.x + axis.x * topY, f.pos.y + axis.y * topY - 1.5, f.pos.z + axis.z * topY, 9, 16, 2.6, 0.34 * f.vent, [0.97, 0.98, 1.0], 0.2, 7000);
-      emit(Math.floor(vc * 0.7), bx, by - 3, bz, 7, -12, 3.2, 0.28 * f.vent, [0.95, 0.96, 0.98], 0.14, 8000);
+      emit(vc, f.pos.x + axis.x * topY, f.pos.y + axis.y * topY - 1.5, f.pos.z + axis.z * topY, 9, 16, 2.4, 0.16 * f.vent, [0.5, 0.52, 0.55], 0.2, 7000);
+      emit(Math.floor(vc * 0.7), bx, by - 3, bz, 7, -12, 3.0, 0.13 * f.vent, [0.48, 0.5, 0.53], 0.14, 8000);
     }
     this.pGeo.instanceCount = n;
     if (n > 0) {
@@ -1214,17 +1240,19 @@ export class WorldScene {
 
   private updateAids(f: FrameState): void {
     const a = f.aids;
-    this.ring.visible = a.show;
+    this.ring.visible = a.ring;
     this.ghostLine.visible = a.show && a.ghost.length > 1;
     this.pinGhost.visible = a.show && !!a.pinGhost;
+    if (a.ring) {
+      // CATCH pressed: the ring flashes white-hot and swells, then settles back.
+      const fl = Math.min(1, Math.max(0, a.flash));
+      this.ring.scale.setScalar((a.ringRadius / RING_UNIT) * (1 + (f.reducedMotion ? 0.08 : 0.3) * fl));
+      const pulse = f.reducedMotion ? 0.85 : 0.7 + 0.25 * Math.sin(f.t * 4);
+      const rm = this.ring.material as THREE.MeshBasicMaterial;
+      rm.opacity = Math.min(1, pulse + fl);
+      rm.color.set(RING_TONE[a.tone]).lerp(this.tmpC.setRGB(2.4, 2.4, 2.4), fl * (f.reducedMotion ? 0.4 : 1));
+    }
     if (!a.show) return;
-    // CATCH pressed: the ring flashes white-hot and swells, then settles back.
-    const fl = Math.min(1, Math.max(0, a.flash));
-    this.ring.scale.setScalar((a.ringRadius / 3) * (1 + (f.reducedMotion ? 0.08 : 0.3) * fl));
-    const pulse = f.reducedMotion ? 0.8 : 0.65 + 0.3 * Math.sin(f.t * 4);
-    const rm = this.ring.material as THREE.MeshBasicMaterial;
-    rm.opacity = Math.min(1, pulse + fl);
-    rm.color.set('#5fffd0').lerp(this.tmpC.setRGB(2.4, 2.4, 2.4), fl * (f.reducedMotion ? 0.4 : 1));
     const attr = this.ghostLine.geometry.getAttribute('position') as THREE.BufferAttribute;
     const n = Math.min(64, a.ghost.length);
     for (let i = 0; i < n; i++) {

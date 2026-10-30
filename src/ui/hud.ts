@@ -9,6 +9,16 @@ import { engineLayout } from '../render/scene';
 import type { InputDevices } from '../input/devices';
 import { el, setText, show, svgEl } from './dom';
 
+/** In / near / out of tolerance. Every tone also has its own glyph. */
+export type Tone = 'ok' | 'warn' | 'bad';
+const TONE_GLYPH: Record<Tone, string> = { ok: '✓', warn: '!', bad: '✕' };
+
+/** Tone for a value against a limit: ok below half of it, warn below it, bad at or above. */
+export function toneFor(value: number, limit: number): Tone {
+  const v = Math.abs(value);
+  return v < 0.5 * limit ? 'ok' : v < limit ? 'warn' : 'bad';
+}
+
 export interface HudData {
   tier: TierId;
   phase: Phase;
@@ -43,6 +53,23 @@ export interface HudData {
   camera: string;
   fps: number | null;
   paused: boolean;
+  /**
+   * Pins vs the arm centreline: distance (m), the screen direction to steer (unit, x right,
+   * z down the screen) and the tone against the tier's pin window. Null hides the chip.
+   */
+  pin: { dist: number; sx: number; sz: number; tone: Tone } | null;
+  /** Tilt from vertical (deg) and its tone against the tier's tilt limit. */
+  tilt: { deg: number; tone: Tone } | null;
+  /** V/S tone against the 2 m/s contact limit near the arms; null far from them (neutral). */
+  vsTone: Tone | null;
+  /** Seconds to the ideal ignition while the 3-2-1 cue shows (every tier); null hides it. */
+  cue: number | null;
+  /** Cadet tapped LIGHT early: the engines light on the mark. */
+  lightArmed: boolean;
+  /** Cadet: the big "steer onto the ring" arrow. */
+  steerCue: boolean;
+  /** Cadet: the board folds into one GO chip. */
+  foldBoard: boolean;
 }
 
 const BOARD_LABELS: [keyof HealthBoard, string][] = [
@@ -89,14 +116,14 @@ export class Hud {
   private readonly alt = el('span', { class: 'v', 'data-testid': 'hud-alt' });
   private readonly altU = el('span', { class: 'u' });
   private readonly spd = el('span', { class: 'v' });
-  private readonly vs = el('span', { class: 'v sm', 'data-testid': 'hud-vs' });
+  private readonly vs = el('span', { 'data-testid': 'hud-vs' });
   private readonly lat = el('span', { class: 'v sm' });
   private readonly prop = el('span', { class: 'v sm' });
   private readonly propFill = el('i');
   private readonly stopLabel = el('span', { class: 'v sm', 'data-testid': 'hud-stop' });
   private readonly stopMark = el('i');
   private readonly ringDots: SVGCircleElement[] = [];
-  private readonly ringCount = svgEl('text', { x: 0, y: 0.55, 'text-anchor': 'middle', class: 'count' });
+  private readonly ringCount = svgEl('text', { x: 0, y: 0.95, 'text-anchor': 'middle', class: 'count' });
   private readonly windCell = el('span', { class: 'cell wind', 'data-testid': 'hud-wind' });
   private readonly windArrow = svgEl('g', {});
   private readonly windText = el('span', { class: 'v sm' });
@@ -125,6 +152,18 @@ export class Hud {
   private readonly ringHold = svgEl('circle', { cx: 50, cy: 50, r: RING_R - 7, class: 'hold' });
   readonly lightBtn = el('button', { id: 'light-btn', class: 'action ui', 'data-testid': 'light-btn', text: 'LIGHT' });
   readonly stepBtn = el('button', { id: 'step-btn', class: 'action ui', 'data-testid': 'step-btn', 'aria-label': 'Step down from 13 to 3 engines (R)' });
+  // Tolerance chips (all tiers): pin offset with a steer arrow, tilt, and V/S vs the contact limit.
+  private readonly pinChip = el('span', { class: 'chip tol', 'data-testid': 'hud-pin' });
+  private readonly pinArrow = svgEl('g', {});
+  private readonly pinText = el('span');
+  private readonly tiltChip = el('span', { class: 'chip tol', 'data-testid': 'hud-tilt' });
+  private readonly vsChip = el('span', { class: 'chip tol vs' }, [this.vs]);
+  private readonly vsGlyph = el('span', { class: 'g' });
+  // The 3-2-1 ignition cue (every tier) and the Cadet steer arrow.
+  private readonly cue = el('div', { id: 'ign-cue', 'data-testid': 'ign-cue', 'aria-hidden': 'true' });
+  private readonly steer = el('div', { id: 'steer-cue', 'data-testid': 'steer-cue' });
+  private readonly steerArrow = svgEl('g', {});
+  private readonly steerText = el('span');
   private captionUntil = 0;
   private divertActive = false;
 
@@ -145,7 +184,7 @@ export class Hud {
     const gauge = el('span', { id: 'stop-gauge' }, [el('b'), this.stopMark]);
     const propBar = el('span', { class: 'bar' }, [this.propFill]);
     const cell = (k: string, ...v: (HTMLElement | string)[]): HTMLSpanElement =>
-      el('span', { class: 'cell' }, [el('span', { class: 'k', text: k }), el('span', { class: 'row' }, v)]);
+      el('span', { class: `cell c-${k.toLowerCase()}` }, [el('span', { class: 'k', text: k }), el('span', { class: 'row' }, v)]);
 
     // Wind: an arrow (top-down, sea to the right), the speed, gust bars and a shear tag.
     const windSvg = svgEl('svg', { viewBox: '-10 -10 20 20', class: 'wind-dial', 'aria-hidden': 'true' });
@@ -168,24 +207,36 @@ export class Hud {
     this.divert.append(this.divertFill, el('span', { class: 'track', text: 'slide · hold to DIVERT' }), this.divertKnob);
     this.gonogo.append(this.decision, this.goBtn, this.divert);
 
+    // Pin chip: a small arrow that points the way to push the stick (screen space).
+    const pinSvg = svgEl('svg', { viewBox: '-10 -10 20 20', class: 'pin-dial', 'aria-hidden': 'true' });
+    pinSvg.append(svgEl('circle', { cx: 0, cy: 0, r: 8.5, class: 'dial' }));
+    this.pinArrow.append(svgEl('path', { d: 'M-5 0 H4 M0.5 -3.5 L4.5 0 L0.5 3.5', class: 'arrow' }));
+    pinSvg.append(this.pinArrow);
+    this.pinChip.append(el('span', { class: 'k', text: 'PIN' }), pinSvg, this.pinText);
+    this.vsChip.append(this.vsGlyph);
+    const tol = el('span', { class: 'cell tolerances' }, [this.pinChip, this.tiltChip]);
+
     const telemetry = el('div', { id: 'telemetry', 'data-testid': 'telemetry' }, [
       el('span', { class: 'brand' }, [el('b', { text: 'HB-07' }), this.mission]),
       ring,
       cell('SPEED', this.spd, el('span', { class: 'u', text: 'KM/H' })),
       cell('ALTITUDE', this.alt, this.altU),
-      el('span', { class: 'cell small' }, [
-        el('span', { class: 'k', text: 'V/S' }),
-        this.vs,
-        el('span', { class: 'k', text: 'LAT' }),
-        this.lat,
-      ]),
+      el('span', { class: 'cell vs-cell' }, [el('span', { class: 'k', text: 'V/S' }), this.vsChip]),
+      el('span', { class: 'cell small' }, [el('span', { class: 'k', text: 'LAT' }), this.lat]),
       cell('PROP', propBar, this.prop),
       cell('STOP', gauge, this.stopLabel),
       this.windCell,
+      tol,
       el('span', { class: 'cell time' }, [el('span', { class: 'k', text: 'T' }), this.tPlus]),
       // Folded in: above the strip on desktop, a wrapped row inside it on phones.
       this.gonogo,
     ]);
+
+    const steerSvg = svgEl('svg', { viewBox: '-20 -20 40 40', class: 'steer-dial', 'aria-hidden': 'true' });
+    steerSvg.append(svgEl('circle', { cx: 0, cy: 0, r: 17, class: 'dial' }));
+    this.steerArrow.append(svgEl('path', { d: 'M-11 0 H9 M2 -7 L10 0 L2 7', class: 'arrow' }));
+    steerSvg.append(this.steerArrow);
+    this.steer.append(steerSvg, this.steerText);
     this.pip.append(this.pipLabel);
     this.pip.hidden = true;
     this.captions.append(el('span', { class: 'radio', 'aria-hidden': 'true', text: '◉' }), this.captionText);
@@ -210,6 +261,8 @@ export class Hud {
       this.catchBtn,
       this.lightBtn,
       this.stepBtn,
+      this.cue,
+      this.steer,
     ]);
     parent.append(this.root);
 
@@ -340,6 +393,48 @@ export class Hud {
     }
     setText(this.spd, fmt(d.speed * 3.6));
     setText(this.vs, `${fmt(d.vs, 1)} m/s`);
+    // V/S against the 2 m/s contact limit (coloured near the arms, with a glyph).
+    const vsCls = `chip tol vs${d.vsTone ? ` ${d.vsTone}` : ''}`;
+    if (this.vsChip.className !== vsCls) this.vsChip.className = vsCls;
+    setText(this.vsGlyph, d.vsTone ? TONE_GLYPH[d.vsTone] : '');
+
+    // Pin offset: distance, a screen-space arrow the way to steer, tone vs the pin window.
+    show(this.pinChip, d.pin !== null);
+    if (d.pin) {
+      const p = d.pin;
+      const ang = (Math.atan2(p.sz, p.sx) * 180) / Math.PI;
+      this.pinArrow.setAttribute('transform', `rotate(${ang.toFixed(0)})`);
+      this.pinArrow.style.opacity = p.tone === 'ok' ? '0.35' : '1';
+      setText(this.pinText, `${fmt(p.dist, p.dist < 10 ? 1 : 0)} m ${TONE_GLYPH[p.tone]}`);
+      const cls = `chip tol ${p.tone}`;
+      if (this.pinChip.className !== cls) this.pinChip.className = cls;
+    }
+    show(this.tiltChip, d.tilt !== null);
+    if (d.tilt) {
+      setText(this.tiltChip, `TILT ${fmt(d.tilt.deg, 1)}° ${TONE_GLYPH[d.tilt.tone]}`);
+      const cls = `chip tol ${d.tilt.tone}`;
+      if (this.tiltChip.className !== cls) this.tiltChip.className = cls;
+    }
+
+    // Cadet steer cue: a big arrow toward the ring, in screen space.
+    show(this.steer, d.steerCue && d.pin !== null);
+    if (d.steerCue && d.pin) {
+      const ang = (Math.atan2(d.pin.sz, d.pin.sx) * 180) / Math.PI;
+      this.steerArrow.setAttribute('transform', `rotate(${ang.toFixed(0)})`);
+      setText(this.steerText, d.pin.tone === 'ok' ? `On the ring ✓ ${fmt(d.pin.dist, 1)} m` : `Steer onto the ring · ${fmt(d.pin.dist, 1)} m`);
+      const cls = d.pin.tone;
+      if (this.steer.className !== cls) this.steer.className = cls;
+    }
+
+    // The 3-2-1 ignition cue, every tier.
+    show(this.cue, d.cue !== null);
+    if (d.cue !== null) {
+      const k = Math.min(3, Math.ceil(d.cue));
+      const txt = d.lightArmed ? 'ARMED ✓' : k >= 1 && k <= 3 ? `${k}…` : 'LIGHT';
+      setText(this.cue, txt);
+      const cls = k >= 1 && k <= 3 && !d.lightArmed ? 'count' : 'go';
+      if (this.cue.className !== cls) this.cue.className = cls;
+    }
     setText(this.lat, `${fmt(d.lat, 1)} m/s`);
     setText(this.prop, `${fmt(d.propFrac * 100)}% · ${fmt(d.propellantT, 1)} t`);
     this.propFill.style.width = `${fmt(d.propFrac * 100, 1)}%`;
@@ -388,6 +483,8 @@ export class Hud {
 
     const g = d.gonogo;
     show(this.gonogo, d.showBoard && d.tau !== null && d.phase !== 'caught' && d.phase !== 'settling' && d.phase !== 'splashdown');
+    // Cadet: one GO chip (the decision), not the six-line board.
+    this.gonogo.classList.toggle('folded', d.foldBoard);
     for (const [key, label] of BOARD_LABELS) {
       const c = this.chips[key];
       if (!c) continue;
@@ -420,10 +517,7 @@ export class Hud {
       this.catchBtn.classList.toggle('urgent', !d.armsClosing && d.catchTgo !== null && d.catchTgo < 4.5);
     }
     show(this.lightBtn, d.lightVisible);
-    if (d.lightVisible && d.igniteIn !== null && d.tier === 'cadet') {
-      const k = Math.ceil(d.igniteIn);
-      setText(this.lightBtn, k >= 1 && k <= 3 ? `${k}… LIGHT` : 'LIGHT');
-    } else setText(this.lightBtn, 'LIGHT');
+    setText(this.lightBtn, d.lightArmed ? 'LIGHT ✓' : 'LIGHT');
     show(this.stepBtn, d.stepVisible);
     show(this.slowMo, d.slowMo);
     setText(this.cameraTag, d.camera);

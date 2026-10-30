@@ -24,6 +24,8 @@ export interface Settings {
   oneHanded: boolean;
   /** The Cadet first-run tutorial has been finished or skipped. */
   tutorialDone: boolean;
+  /** Speak the Cadet tutorial and coach lines (offline device voices only). */
+  voice: boolean;
 }
 
 /** The parts of the Web Storage API the game uses. */
@@ -69,6 +71,7 @@ export function defaultSettings(): Settings {
     keys: presetKeys('standard'),
     oneHanded: false,
     tutorialDone: false,
+    voice: true,
   };
 }
 
@@ -108,6 +111,7 @@ export function loadSettings(): Settings {
       keys: preset === 'custom' ? sanitizeKeyMap(s.keys) : presetKeys(preset),
       oneHanded: typeof s.oneHanded === 'boolean' ? s.oneHanded : d.oneHanded,
       tutorialDone: typeof s.tutorialDone === 'boolean' ? s.tutorialDone : d.tutorialDone,
+      voice: typeof s.voice === 'boolean' ? s.voice : d.voice,
     };
   } catch {
     return d;

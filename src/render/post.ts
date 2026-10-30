@@ -1,5 +1,5 @@
 // Final screen pass (after tone mapping): heat shimmer for the long lens, an engine
-// glare with an anamorphic streak and ghosts, vignette and fine film grain.
+// glare, an anamorphic streak and ghosts (ignition flash only), vignette and film grain.
 import * as THREE from 'three';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 
@@ -14,6 +14,10 @@ const FinishShader = {
     uShimmer: { value: 0 },
     uFlarePos: { value: new THREE.Vector2(0.5, 0.5) },
     uFlare: { value: 0 },
+    uStreak: { value: 0 },
+    uGhost: { value: 0 },
+    uMaskPos: { value: new THREE.Vector2(-9, -9) },
+    uMaskR: { value: 0.1 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -31,6 +35,10 @@ const FinishShader = {
     uniform float uShimmer;
     uniform vec2 uFlarePos;
     uniform float uFlare;
+    uniform float uStreak;
+    uniform float uGhost;
+    uniform vec2 uMaskPos;
+    uniform float uMaskR;
     varying vec2 vUv;
 
     float hash12(vec2 p) {
@@ -55,17 +63,23 @@ const FinishShader = {
       }
       vec3 c = texture2D(tDiffuse, uv).rgb;
 
-      if (uFlare > 0.0) {
+      if (uFlare > 0.0 || uStreak > 0.0) {
         vec2 d = (vUv - uFlarePos) * vec2(uAspect, 1.0);
         float r2 = dot(d, d);
         float glow = 0.012 / (r2 * 60.0 + 0.012);
-        float streak = exp(-abs(d.y) * 420.0) * exp(-abs(d.x) * 2.6);
+        // A thin anamorphic line, only in the ignition flash.
+        float streak = exp(-abs(d.y) * 1700.0) * exp(-abs(d.x) * 2.6);
         vec3 warm = vec3(1.0, 0.62, 0.32);
-        c += uFlare * (warm * glow * 0.45 + vec3(1.0, 0.72, 0.5) * streak * 0.55);
-        vec2 axis = vec2(0.5) - uFlarePos;
-        c += uFlare * ghost(vUv, uFlarePos + axis * 1.3, 0.035, vec3(0.6, 0.8, 1.0));
-        c += uFlare * ghost(vUv, uFlarePos + axis * 1.75, 0.07, vec3(1.0, 0.6, 0.4));
-        c += uFlare * ghost(vUv, uFlarePos + axis * 2.2, 0.02, vec3(0.7, 1.0, 0.7));
+        c += uFlare * warm * glow * 0.45 + uStreak * vec3(1.0, 0.72, 0.5) * streak * 0.55;
+        if (uGhost > 0.0) {
+          vec2 axis = vec2(0.5) - uFlarePos;
+          vec3 g = ghost(vUv, uFlarePos + axis * 1.3, 0.035, vec3(0.6, 0.8, 1.0));
+          g += ghost(vUv, uFlarePos + axis * 1.75, 0.07, vec3(1.0, 0.6, 0.4));
+          g += ghost(vUv, uFlarePos + axis * 2.2, 0.02, vec3(0.7, 1.0, 0.7));
+          // No ghosts over the tower top.
+          float m = length((vUv - uMaskPos) * vec2(uAspect, 1.0));
+          c += uGhost * g * smoothstep(uMaskR, uMaskR * 2.0, m);
+        }
       }
 
       vec2 v = (vUv - 0.5) * vec2(uAspect, 1.0);
@@ -84,13 +98,34 @@ export class FinishPass extends ShaderPass {
     super(FinishShader);
   }
 
-  set(o: { time: number; aspect: number; shimmer: number; flare: number; flareX: number; flareY: number; grain: number; vignette: number }): void {
+  set(o: {
+    time: number;
+    aspect: number;
+    shimmer: number;
+    /** Soft glow around the engines. */
+    flare: number;
+    /** Anamorphic streak and ghosts: the ignition flash only. */
+    streak: number;
+    ghost: number;
+    flareX: number;
+    flareY: number;
+    /** Screen point (uv) and radius where ghosts are masked out (the tower top). */
+    maskX: number;
+    maskY: number;
+    maskR: number;
+    grain: number;
+    vignette: number;
+  }): void {
     const u = this.uniforms as Record<string, THREE.IUniform>;
     u['uTime']!.value = o.time;
     u['uAspect']!.value = o.aspect;
     u['uShimmer']!.value = o.shimmer;
     u['uFlare']!.value = o.flare;
+    u['uStreak']!.value = o.streak;
+    u['uGhost']!.value = o.ghost;
     (u['uFlarePos']!.value as THREE.Vector2).set(o.flareX, o.flareY);
+    (u['uMaskPos']!.value as THREE.Vector2).set(o.maskX, o.maskY);
+    u['uMaskR']!.value = o.maskR;
     u['uGrain']!.value = o.grain;
     u['uVignette']!.value = o.vignette;
   }

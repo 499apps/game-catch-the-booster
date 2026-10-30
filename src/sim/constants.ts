@@ -17,6 +17,17 @@ export const SPOOL_MIN = 0.6; // s, relight spool time range
 export const SPOOL_MAX = 1.2;
 export const GIMBAL_MAX = (15 * Math.PI) / 180; // rad
 export const STEP_DOWN_KEEP = 3;
+/**
+ * Pilot step-down interlock: after STEP, the 13 engines arrest any rotation (they have ~5x
+ * the attitude authority of 3), then the step happens once the booster is within
+ * STEP_MAX_TILT and turning slower than STEP_MAX_RATE. It never waits longer than
+ * STEP_MAX_WAIT, and it steps at once if the fall slows under STEP_FORCE_SPEED, so the
+ * 13-engine burn never eats the fall (or the propellant) the 3-engine descent needs.
+ */
+export const STEP_MAX_TILT = (10 * Math.PI) / 180; // rad
+export const STEP_MAX_RATE = 0.1; // rad/s
+export const STEP_MAX_WAIT = 1.0; // s
+export const STEP_FORCE_SPEED = 35; // m/s descent
 
 // ---- Heron-class booster ----
 export const DRY_MASS = 250_000; // kg

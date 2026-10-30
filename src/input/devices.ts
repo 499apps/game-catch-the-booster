@@ -8,6 +8,7 @@ import {
   mapKeyboard,
   mapTouch,
   mergeIntents,
+  rotateStick,
   type KeyMap,
   type PadState,
   type RawIntent,
@@ -59,6 +60,8 @@ export class InputDevices {
   capturing = false;
   /** True while a gamepad is connected and has been used. */
   padActive = false;
+  /** Stick deflection (0..~1.4) in the last sample, before smoothing. */
+  rawStick = 0;
 
   setKeyMap(km: KeyMap): void {
     this.keymap = km;
@@ -150,8 +153,12 @@ export class InputDevices {
     return pads.find((p): p is Gamepad => !!p && p.connected) ?? null;
   }
 
-  /** Reads every device and returns the shaped pilot input for this frame. */
-  sample(dt: number): PilotInput {
+  /**
+   * Reads every device and returns the shaped pilot input for this frame. `stickYaw`
+   * rotates the merged stick from screen axes into world axes before the shaper, so the
+   * smoothed values (and the replay log) are world values.
+   */
+  sample(dt: number, stickYaw = 0): PilotInput {
     this.xHeld = divertHeld(this.held, this.keymap) ? this.xHeld + dt : 0;
     const keys = this.tapped.size ? new Set([...this.held, ...this.tapped]) : this.held;
     this.tapped.clear();
@@ -181,7 +188,10 @@ export class InputDevices {
     this.touch.stepDownPressed = false;
     this.touch.goPressed = false;
 
-    return this.shaper.update(mergeIntents(list), dt);
+    const raw = mergeIntents(list);
+    this.rawStick = Math.hypot(raw.stickX, raw.stickZ);
+    if (stickYaw !== 0) [raw.stickX, raw.stickZ] = rotateStick(raw.stickX, raw.stickZ, stickYaw);
+    return this.shaper.update(raw, dt);
   }
 
   /** Gamepad rumble scaled by thrust (0..1). Throttled to ~8 Hz. */

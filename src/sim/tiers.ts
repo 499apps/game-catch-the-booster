@@ -2,6 +2,8 @@
 import { LATERAL_SPEED_LIMIT, PIN_HEIGHT_AT_CLOSE_MAX, PIN_WINDOW, TILT_LIMIT_DEG } from './constants';
 
 export type TierId = 'cadet' | 'pilot' | 'fd';
+/** m: Pilot pin window (Flight Director keeps the strict PIN_WINDOW, Cadet has 3 m). */
+export const PILOT_PIN_WINDOW = 2.5;
 export const TIERS: readonly TierId[] = ['cadet', 'pilot', 'fd'];
 
 export interface TierConfig {
@@ -55,7 +57,9 @@ export const TIER_CONFIG: Record<TierId, TierConfig> = {
     autoIgnition: false,
     autoStepDown: false,
     autoGoNoGo: true,
-    pinWindow: PIN_WINDOW,
+    // The arms' rail guides funnel the pins in from 2.5 m; the score still falls off from 0 m,
+    // so precision pays, but a steady 2 m approach is a catch, not a miss.
+    pinWindow: PILOT_PIN_WINDOW,
     pinHeightAtCloseMax: PIN_HEIGHT_AT_CLOSE_MAX,
     tiltLimitDeg: TILT_LIMIT_DEG,
     lateralSpeedLimit: LATERAL_SPEED_LIMIT,

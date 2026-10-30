@@ -7,7 +7,8 @@ import { aeroNow, massOf } from './dynamics';
 import { availableEngines } from './engines';
 import { boardHealthy } from './gonogo';
 import { pinHeightAboveRails, timeToContact } from './predictor';
-import { LA_END, T_CONTACT, T_DIVERT, T_STEPDOWN, idealIgnitionHeight, referenceAt } from './reference';
+import { LA_END, T_CONTACT, T_DIVERT, T_DIVERT_END, T_STEPDOWN, idealIgnitionHeight, referenceAt } from './reference';
+import { makeRng, next } from './rng';
 import type { FlightCommand, World } from './types';
 import { axisFromTilt, clampLen2, type Vec2, type Vec3 } from './vec';
 
@@ -19,7 +20,23 @@ export const KP_LAT3 = 0.25;
 export const KD_LAT3 = 0.9;
 export const KP_VERT = 1.0;
 export const KD_VERT = 1.8;
-export const CADET_LAT_GAIN = 0.8; // 1/s, lateral velocity hold
+/**
+ * Cadet: the divert flies itself, but its aim point starts off the centre by this much (m,
+ * a seeded direction), so the booster lands inside the 3 m window with no input and the
+ * stick earns the Bullseye. The stick never adds velocity: it only moves the aim point
+ * (World.aim, see world.ts), and the autopilot keeps full control of the flight.
+ */
+export const CADET_AIM_MIN = 1.0;
+export const CADET_AIM_MAX = 2.2;
+/** m/s: the fastest the Cadet stick moves the aim point (full stick). */
+export const CADET_AIM_RATE = 1.0;
+/** m: the aim point stays this far inside the edge of the pin window, whatever the stick does. */
+export const CADET_AIM_MARGIN = 0.8;
+/** m of pin height: below this the aim point freezes, so the booster settles before contact. */
+export const CADET_AIM_FREEZE = 8;
+
+/** Largest distance of the Cadet aim point from the arm centreline (m). */
+export const cadetAimLimit = (pinWindow: number): number => Math.max(0, pinWindow - CADET_AIM_MARGIN);
 // s: press CATCH when predicted contact <= close time + this. The arms then finish
 // ~1 s before contact with the pins ~2-3 m above the rails (window 0-20 m).
 export const PRESS_LEAD = 1.2;
@@ -39,9 +56,17 @@ function tiltLimit13(tau: number): number {
   return TILT_LIMIT_13 + (TILT_LIMIT_UPRIGHT - TILT_LIMIT_13) * s;
 }
 
+/** Cadet's seeded hands-off aim point of the divert (m, horizontal; the start of World.aim). */
+export function cadetAimOffset(seed: number): Vec2 {
+  const r = makeRng(seed, 4);
+  const a = next(r) * 2 * Math.PI;
+  const m = CADET_AIM_MIN + (CADET_AIM_MAX - CADET_AIM_MIN) * next(r);
+  return { x: m * Math.cos(a), z: m * Math.sin(a) };
+}
+
 export interface AutopilotOptions {
-  /** Cadet: the player's stick commands lateral velocity after the divert starts. */
-  lateralVelocity?: Vec2 | null;
+  /** Cadet: the divert aims at World.aim (the aim point the player's stick moves). */
+  cadet?: boolean;
   /** Let the autopilot press CATCH (false in Cadet: the player presses it). */
   pressCatch?: boolean;
   /** Let the autopilot make the Flight Director call. */
@@ -65,6 +90,12 @@ export function emptyCommand(): FlightCommand {
   };
 }
 
+/** 0 at the divert start .. 1 at its end (smoothstep): how much of the Cadet aim point applies. */
+function divertBlend(tau: number): number {
+  const s = Math.min(1, Math.max(0, (tau - T_DIVERT) / (T_DIVERT_END - T_DIVERT)));
+  return s * s * (3 - 2 * s);
+}
+
 /** Desired acceleration (m/s^2, without gravity) from guidance. Null before ignition. */
 export function guidanceAccel(w: World, opts: AutopilotOptions = {}): Vec3 | null {
   if (!w.ignition) return null;
@@ -79,6 +110,12 @@ export function guidanceAccel(w: World, opts: AutopilotOptions = {}): Vec3 | nul
     ref.pos.x += k * tmpAeroG.x;
     ref.pos.z += k * tmpAeroG.z;
   }
+  if (opts.cadet && tau >= T_DIVERT) {
+    // Cadet: the divert swings in by itself toward the aim point (the stick moves it).
+    const blend = divertBlend(tau);
+    ref.pos.x += w.aim.x * blend;
+    ref.pos.z += w.aim.z * blend;
+  }
   // Lateral feedback point. On 3 engines the gimbal side force is as large as the lean
   // itself (right-half-plane zero near 1 rad/s), so steer the centre of percussion, which
   // the side force does not move. On 13 engines that zero is far above the loop bandwidth.
@@ -92,17 +129,11 @@ export function guidanceAccel(w: World, opts: AutopilotOptions = {}): Vec3 | nul
   const pz = w.pos.z + cop * w.tilt.z;
   const vx = w.vel.x + cop * w.tiltRate.x;
   const vz = w.vel.z + cop * w.tiltRate.z;
-  const a: Vec3 = {
+  return {
     x: ref.acc.x + kp * (ref.pos.x + cop * leanRefX - px) + kd * (ref.vel.x - vx),
     y: ref.acc.y + KP_VERT * (ref.pos.y - w.pos.y) + KD_VERT * (ref.vel.y - w.vel.y),
     z: ref.acc.z + kp * (ref.pos.z + cop * leanRefZ - pz) + kd * (ref.vel.z - vz),
   };
-  const lv = opts.lateralVelocity;
-  if (lv && w.flags.divert) {
-    a.x = CADET_LAT_GAIN * (lv.x - vx);
-    a.z = CADET_LAT_GAIN * (lv.z - vz);
-  }
-  return a;
 }
 
 export function autopilotCommand(w: World, opts: AutopilotOptions = {}): FlightCommand {
@@ -165,9 +196,18 @@ export function ghostPath(w: World, n = 24): Vec3[] {
   const go = w.gonogo.decision !== 'noGo';
   const out: Vec3[] = [];
   const end = Math.max(tau0, T_CONTACT);
+  // Cadet: the path ends at the aim point (where the divert will really go). The stick
+  // moves it, so steering the end of this line onto the ring is the Cadet's job.
+  const aim = w.cfg.control === 'cadet' && go ? w.aim : null;
   for (let i = 0; i <= n; i++) {
     const tau = tau0 + ((end - tau0) * i) / n;
-    out.push(referenceAt(w.ignition, tau, go).pos);
+    const p = referenceAt(w.ignition, tau, go).pos;
+    if (aim && tau > T_DIVERT) {
+      const blend = divertBlend(tau);
+      p.x += aim.x * blend;
+      p.z += aim.z * blend;
+    }
+    out.push(p);
   }
   return out;
 }

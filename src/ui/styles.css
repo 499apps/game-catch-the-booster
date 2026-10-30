@@ -413,7 +413,7 @@ summary:focus-visible {
 #debrief .legend {
   display: flex;
   gap: 10px;
-  font-size: 11px;
+  font-size: 12px;
   margin: 4px 0 8px;
 }
 #debrief .legend .alt {
@@ -473,8 +473,8 @@ summary:focus-visible {
   letter-spacing: 0.18em;
 }
 #telemetry .mission {
-  font-size: 10px;
-  letter-spacing: 0.14em;
+  font-size: 12px;
+  letter-spacing: 0.12em;
   color: var(--accent);
 }
 #telemetry .cell {
@@ -499,8 +499,8 @@ summary:focus-visible {
 }
 #telemetry .k {
   color: var(--dim);
-  font-size: 10px;
-  letter-spacing: 0.16em;
+  font-size: 12px;
+  letter-spacing: 0.12em;
 }
 #telemetry .v {
   font-weight: 800;
@@ -512,8 +512,8 @@ summary:focus-visible {
 }
 #telemetry .u {
   color: var(--dim);
-  font-size: 10px;
-  letter-spacing: 0.1em;
+  font-size: 12px;
+  letter-spacing: 0.08em;
 }
 #telemetry .time {
   margin-left: auto;
@@ -573,8 +573,11 @@ summary:focus-visible {
   stroke-width: 0.25;
 }
 #engine-ring .count {
-  fill: #0d1b2a;
-  font-size: 1.5px;
+  fill: #fff;
+  stroke: #0d1b2a;
+  stroke-width: 0.5;
+  paint-order: stroke;
+  font-size: 2.6px;
   font-weight: 800;
 }
 #stop-gauge {
@@ -609,6 +612,107 @@ summary:focus-visible {
   background: #fff;
   opacity: 0.6;
 }
+/* Tolerance chips: pin offset (with a steer arrow), tilt and V/S. Colour + glyph. */
+#telemetry .chip.tol {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: rgba(8, 16, 26, 0.6);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+#telemetry .chip.tol .k {
+  font-size: 12px;
+}
+#telemetry .chip.tol.ok {
+  border-color: var(--go);
+  color: var(--go);
+}
+#telemetry .chip.tol.warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+#telemetry .chip.tol.bad {
+  border: 2px solid var(--bad);
+  color: var(--bad);
+}
+#telemetry .tolerances {
+  flex-direction: row;
+  gap: 6px;
+  align-items: center;
+}
+.pin-dial {
+  width: 18px;
+  height: 18px;
+}
+.pin-dial .dial,
+.steer-dial .dial {
+  fill: rgba(0, 0, 0, 0.3);
+  stroke: currentColor;
+  stroke-width: 1;
+  opacity: 0.6;
+}
+.pin-dial .arrow,
+.steer-dial .arrow {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* The 3-2-1 ignition cue: big, centred above the LIGHT button, in every tier. */
+#ign-cue {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--sb) + 214px);
+  transform: translateX(-50%);
+  font-size: 54px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: #fff;
+  text-shadow:
+    0 2px 6px #000,
+    0 0 18px rgba(255, 179, 71, 0.6);
+}
+#ign-cue.go {
+  color: var(--warn);
+  font-size: 44px;
+}
+/* Cadet: the steer arrow toward the ring (screen space). */
+#steer-cue {
+  position: absolute;
+  left: 50%;
+  top: 56%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px 6px 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid var(--warn);
+  color: var(--warn);
+  font-size: 16px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+#steer-cue.ok {
+  border-color: var(--go);
+  color: var(--go);
+}
+.steer-dial {
+  width: 46px;
+  height: 46px;
+}
+/* Cadet: the Go/No-Go board folds into one GO chip. */
+#gonogo.folded .chip {
+  display: none;
+}
+
 /* Wind / gusts / shear */
 .wind-dial {
   width: 22px;
@@ -653,7 +757,7 @@ summary:focus-visible {
   background: #8fd3f0;
 }
 #telemetry .shear {
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.1em;
   padding: 1px 4px;
@@ -675,7 +779,7 @@ summary:focus-visible {
   align-items: center;
   width: max-content;
   max-width: calc(100vw - 40px);
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.08em;
   pointer-events: auto;
 }
@@ -739,7 +843,7 @@ summary:focus-visible {
   padding-left: 30px;
   color: var(--bad);
   font-weight: 700;
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 .divert i {
@@ -822,7 +926,7 @@ summary:focus-visible {
   position: absolute;
   left: calc(var(--sl) + 66px);
   top: calc(var(--st) + 24px);
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.14em;
   color: var(--ink);
   text-transform: uppercase;
@@ -864,7 +968,7 @@ summary:focus-visible {
   position: absolute;
   left: 6px;
   bottom: 4px;
-  font-size: 9px;
+  font-size: 12px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   text-shadow: 0 1px 2px #000;
@@ -873,7 +977,7 @@ summary:focus-visible {
   position: absolute;
   right: calc(var(--sr) + 14px);
   bottom: calc(var(--sb) + 84px);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--dim);
 }
 /* Soft lens vignette on every quality tier (cheap: CSS, not a GPU pass). */
@@ -1085,6 +1189,17 @@ summary:focus-visible {
   height: 100%;
   background: var(--accent);
 }
+#tutorial .hint {
+  margin-top: 6px;
+  font-size: 15px;
+  color: #ffd25e;
+}
+#tutorial .buttons {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
 #tutorial .skip {
   pointer-events: auto;
   min-height: 40px;
@@ -1186,13 +1301,19 @@ summary:focus-visible {
 #split-labels span {
   align-self: end;
   margin: 0 0 10px 12px;
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   text-shadow: 0 1px 3px #000;
 }
-#split-labels span:nth-child(-n + 2) {
-  align-self: end;
+/* The bottom row sits above the replay bar (taller on phones, where it wraps). */
+#split-labels span:nth-child(n + 3) {
+  margin-bottom: calc(var(--sb) + 84px);
+}
+@media (max-width: 760px), (max-height: 520px) {
+  #split-labels span:nth-child(n + 3) {
+    margin-bottom: calc(var(--sb) + 128px);
+  }
 }
 
 /* ---------- Touch controls ---------- */
@@ -1327,6 +1448,9 @@ summary:focus-visible {
 .touch #light-btn {
   bottom: calc(var(--sb) + 40px);
 }
+.touch #ign-cue {
+  bottom: calc(var(--sb) + 112px);
+}
 .touch #step-btn {
   bottom: calc(var(--sb) + 180px);
 }
@@ -1374,39 +1498,91 @@ summary:focus-visible {
   .cams .btn {
     font-size: 16px;
   }
+  /*
+   * Compact phone strip (about 12-20% of a 393x852 screen): row 1 engines, altitude, V/S
+   * (coloured vs the 2 m/s contact limit), STOP and the clock; row 2 the pin and tilt
+   * chips and the wind; row 3 the board (one GO chip in Cadet).
+   */
   #telemetry {
-    font-size: 11px;
-    gap: 3px 10px;
-    padding: 5px 9px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr) auto;
+    grid-template-areas:
+      'ring alt vs stop time'
+      'tol tol tol wind wind'
+      'board board board board board';
+    gap: 3px 6px;
+    align-items: center;
+    font-size: 12px;
+    padding: 5px 8px;
+  }
+  #telemetry .brand,
+  #telemetry .c-speed,
+  #telemetry .c-prop,
+  #telemetry .cell.small,
+  #stop-gauge,
+  #telemetry .bar,
+  #telemetry .gust,
+  #telemetry .cell.wind .k {
+    display: none;
+  }
+  #engine-ring {
+    grid-area: ring;
+    width: 40px;
+    height: 40px;
+  }
+  #telemetry .c-altitude {
+    grid-area: alt;
+  }
+  #telemetry .vs-cell {
+    grid-area: vs;
+  }
+  #telemetry .c-stop {
+    grid-area: stop;
+  }
+  #telemetry .time {
+    grid-area: time;
+    margin-left: 0;
+  }
+  #telemetry .tolerances {
+    grid-area: tol;
+  }
+  #telemetry .cell.wind {
+    grid-area: wind;
+    justify-self: end;
+  }
+  #telemetry .cell {
+    overflow: hidden;
   }
   #telemetry .v {
     font-size: 16px;
   }
   #telemetry .clock {
-    font-size: 17px;
+    font-size: 15px;
   }
-  #telemetry .brand {
-    padding-right: 8px;
-  }
-  #telemetry .brand b {
+  #telemetry .chip.tol {
+    padding: 1px 5px;
     font-size: 12px;
   }
-  #telemetry .cell.small,
-  #stop-gauge,
-  #telemetry .bar,
-  #telemetry .gust {
-    display: none;
-  }
-  #engine-ring {
-    width: 36px;
-    height: 36px;
-  }
-  #gonogo {
+  #gonogo,
+  .touch #gonogo {
+    grid-area: board;
+    position: static;
+    transform: none;
+    width: auto;
+    max-width: none;
+    justify-content: flex-start;
     gap: 4px;
+    margin: 0;
+    padding-top: 3px;
+    border-top: 1px solid var(--line);
+  }
+  #gonogo.folded {
+    border-top: none;
+    padding-top: 0;
   }
   #gonogo .chip {
     padding: 3px 5px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .divert {
     width: 180px;
@@ -1451,7 +1627,7 @@ summary:focus-visible {
     border-right: none;
   }
   #telemetry .mission {
-    font-size: 9px;
+    font-size: 12px;
   }
   #telemetry .cell.wind .k {
     display: none;

@@ -6,9 +6,12 @@ const cadet = TIER_CONFIG.cadet;
 const ok = { lateralError: 0.2, tiltDeg: 0.5, lateralSpeed: 0.2, contactSpeed: 1 };
 
 describe('catch envelope', () => {
-  it('pin window boundary: 1.5 m in, just over is a miss (Cadet 3 m)', () => {
-    expect(classifyContact({ ...ok, lateralError: 1.5 }, pilot)).toBe('clean');
-    expect(classifyContact({ ...ok, lateralError: 1.5001 }, pilot)).toBe('missLateral');
+  it('pin window boundary: Flight Director 1.5 m, Pilot 2.5 m (rail guides), Cadet 3 m', () => {
+    const fd = TIER_CONFIG.fd;
+    expect(classifyContact({ ...ok, lateralError: 1.5 }, fd)).toBe('clean');
+    expect(classifyContact({ ...ok, lateralError: 1.5001 }, fd)).toBe('missLateral');
+    expect(classifyContact({ ...ok, lateralError: 2.5 }, pilot)).toBe('clean');
+    expect(classifyContact({ ...ok, lateralError: 2.5001 }, pilot)).toBe('missLateral');
     expect(classifyContact({ ...ok, lateralError: 3 }, cadet)).toBe('clean');
     expect(classifyContact({ ...ok, lateralError: 3.0001 }, cadet)).toBe('missLateral');
   });

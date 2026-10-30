@@ -1,14 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import {
-  PRAISE_TIME,
-  READY_TIME,
-  STEER_TIME,
-  STEP_TIMEOUT,
-  TUTORIAL_MAX_SECONDS,
-  Tutorial,
-  type TutorialInput,
-} from '../../src/app/tutorial';
+import { PRAISE_TIME, READY_TIME, STEER_TIME, STEP_HINT, Tutorial, type TutorialInput } from '../../src/app/tutorial';
+import { tutorialLine } from '../../src/ui/tutorialView';
 
 const idle: TutorialInput = { stick: 0, ignite: false, closeArms: false };
 const DT = 1 / 60;
@@ -50,10 +43,22 @@ describe('Cadet tutorial', () => {
     expect(t.praise).toBe(0);
   });
 
-  it('a step the player does not do moves on by itself', () => {
+  it('a step waits for the player: it never moves on by itself', () => {
     const t = new Tutorial();
-    run(t, STEP_TIMEOUT + 0.05);
+    run(t, 30);
+    expect(t.step).toBe('steer');
+    expect(t.done.size).toBe(0);
+  });
+
+  it('after a while it offers a hint and "Skip step", which moves on without counting the step', () => {
+    const t = new Tutorial();
+    run(t, STEP_HINT - 0.1);
+    expect(t.hint).toBe(false);
+    run(t, 0.2);
+    expect(t.hint).toBe(true);
+    t.skipStep();
     expect(t.step).toBe('light');
+    expect(t.hint).toBe(false);
     expect(t.done.size).toBe(0);
   });
 
@@ -73,30 +78,32 @@ describe('Cadet tutorial', () => {
     expect(t.update(DT, { ...idle, stick: 1 })).toBe(false);
   });
 
-  it('never takes more than about 20 s, whatever the player does (property)', () => {
-    expect(TUTORIAL_MAX_SECONDS).toBeLessThanOrEqual(20);
+  it('a player who does each step finishes quickly, whatever else they press (property)', () => {
     fc.assert(
-      fc.property(
-        fc.array(fc.record({ stick: fc.double({ min: 0, max: 1, noNaN: true }), ignite: fc.boolean(), closeArms: fc.boolean() }), {
-          minLength: 1,
-          maxLength: 50,
-        }),
-        (inputs) => {
-          const t = new Tutorial();
-          let i = 0;
-          while (!t.finished && t.total < 60) t.update(DT, inputs[i++ % inputs.length] ?? idle);
-          expect(t.finished).toBe(true);
-          expect(t.total).toBeLessThanOrEqual(TUTORIAL_MAX_SECONDS + 0.05);
-        },
-      ),
+      fc.property(fc.array(fc.boolean(), { minLength: 1, maxLength: 20 }), (noise) => {
+        const t = new Tutorial();
+        let i = 0;
+        // Each step is answered within a second; between answers, random presses.
+        while (!t.finished && t.total < 30) {
+          const step = t.step;
+          const n = noise[i++ % noise.length];
+          const inp: TutorialInput = {
+            stick: step === 'steer' ? 0.9 : n ? 0.3 : 0,
+            ignite: step === 'light' || (!!n && step === 'steer'),
+            closeArms: step === 'catch',
+          };
+          t.update(DT, inp);
+        }
+        expect(t.finished).toBe(true);
+        expect(t.total).toBeLessThan(3 * (STEER_TIME + PRAISE_TIME + 0.1) + READY_TIME + 0.5);
+      }),
     );
   });
 
-  it('timeout progress runs 0..1 within a step', () => {
-    const t = new Tutorial();
-    expect(t.timeout).toBe(0);
-    run(t, STEP_TIMEOUT / 2);
-    expect(t.timeout).toBeGreaterThan(0.4);
-    expect(t.timeout).toBeLessThan(0.6);
+  it('every card has words to speak', () => {
+    for (const step of ['steer', 'light', 'catch', 'ready'] as const) {
+      for (const kind of ['touch', 'keys', 'pad'] as const) expect(tutorialLine(step, kind)?.length ?? 0).toBeGreaterThan(10);
+    }
+    expect(tutorialLine('done', 'keys')).toBeNull();
   });
 });
