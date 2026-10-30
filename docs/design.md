@@ -313,3 +313,27 @@ Propellant budget:
 - The poll runs at +8 s. Checks: engines, propellant, track, tower sensors, arms, comms.
 - Cadet and Pilot decide automatically. The Flight Director must call GO or NO-GO by +12.5 s. With no call, the booster stays safe and diverts offshore.
 - A Flight Director No-Go with a red board earns "Good Call" (+200).
+
+## Implementation notes (C1b, greybox client)
+
+### Modules
+- `src/app/game.ts`: the shell. It owns the run (world, input recorder or replay player), the fixed-step loop, the auto-director, captions and the test hooks.
+- `src/render/`: `scene.ts` (sky, sea, land, the Catcher, the booster, plumes, steam, Cadet aids, recovery boat), `cameras.ts` (5 rigs and the auto-director), `view.ts` (renderer, bloom, sky-only image lighting), `quality.ts` (Low/Medium/High/Auto).
+- `src/input/devices.ts`: keyboard, Gamepad API (with rumble), touch state. `src/input/mapping.ts` does the smoothing and rate limits.
+- `src/ui/`: the LEFT rail and drawer (`menu.ts`), the HUD (`hud.ts`) and the touch controls (`touch.ts`).
+- `src/audio/audio.ts`: procedural Web Audio. The roar and the booster sounds reach the active camera after distance / 343 m/s.
+
+### Camera director
+| Phase | Camera |
+|---|---|
+| Coast, ignition to +4 s | Beach long lens |
+| +4 s to +10 s | Drone chase |
+| +10 s to +19 s | Beach long lens |
+| +19 s, or arms closing | Tower top |
+| Caught (after 1.5 s), splashdown | Wide bay |
+
+Each shot holds at least 2.5 s, except for urgent cuts (arms closing, end of run).
+
+### Determinism
+- A replay uses the seed, the tier, the autopilot flag and the sparse input log. The e2e suite checks that a replay gives the same score.
+- `?still=1` frames use seed 1, Medium quality, and render time 0. The steam positions are a pure function of time, so the frames are deterministic.

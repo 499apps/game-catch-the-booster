@@ -1,0 +1,53 @@
+// URL test hooks. All are harmless in production: they only change pacing, seeding
+// and what is drawn. `window.__catch` is exposed only when one of them is present.
+import type { TierId } from '../sim/tiers';
+import type { QualitySetting } from './storage';
+
+export interface Hooks {
+  /** Any hook present: expose window.__catch. */
+  active: boolean;
+  autopilot: boolean;
+  timescale: number;
+  still: boolean;
+  seed: number | null;
+  tier: TierId | null;
+  /** Still mode: freeze an in-flight frame this many seconds after ignition. */
+  at: number | null;
+  /** Still mode: show the debrief of a finished autopilot run. */
+  debrief: boolean;
+  /** Show the fps counter. */
+  fps: boolean;
+  /** Force a quality setting (tests use Low on software-rendered browsers). */
+  quality: QualitySetting | null;
+}
+
+const QUALITY_IDS: readonly string[] = ['auto', 'low', 'medium', 'high'];
+
+const TIER_IDS: readonly string[] = ['cadet', 'pilot', 'fd'];
+
+function num(v: string | null): number | null {
+  if (v === null || v.trim() === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function parseHooks(search: string): Hooks {
+  const p = new URLSearchParams(search);
+  const keys = ['autopilot', 'timescale', 'still', 'seed', 'tier', 'at', 'debrief', 'fps', 'test', 'quality'];
+  const q = p.get('quality');
+  const active = keys.some((k) => p.has(k));
+  const tierRaw = p.get('tier');
+  const ts = num(p.get('timescale'));
+  return {
+    active,
+    autopilot: p.get('autopilot') === '1',
+    timescale: ts !== null ? Math.min(Math.max(ts, 0.1), 16) : 1,
+    still: p.get('still') === '1',
+    seed: num(p.get('seed')),
+    tier: tierRaw && TIER_IDS.includes(tierRaw) ? (tierRaw as TierId) : null,
+    at: num(p.get('at')),
+    debrief: p.get('debrief') === '1',
+    fps: p.get('fps') === '1' || active,
+    quality: q && QUALITY_IDS.includes(q) ? (q as QualitySetting) : null,
+  };
+}
