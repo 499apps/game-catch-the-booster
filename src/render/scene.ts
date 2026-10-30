@@ -22,6 +22,7 @@ import { TOWER_TOP_LAYER, WIDE_CAM } from './cameras';
 import {
   FOG_COLOR,
   FOG_DENSITY,
+  NOZZLE_GLOW_RGB,
   PLUME_COLOR,
   SUN_DIR,
   makeGlowTexture,
@@ -35,6 +36,7 @@ import {
   makeWaterMaterial,
   makeWetSandMaterial,
   plumeLathe,
+  plumeTone,
 } from './materials';
 import type { QualityProfile } from './quality';
 import { WATERLINE_X, fbm2, grassAmount, terrainHeight } from './terrain';
@@ -52,12 +54,56 @@ const TOP_Y = BOOSTER_LENGTH - COM_ABOVE_BASE;
 const WASH_AT_CUTOFF = 0.8;
 const WASH_DECAY = 6;
 /** The target ring geometry has this radius; it is scaled to the hull radius + pin window. */
-const RING_UNIT = 6;
+export const RING_UNIT = 6;
 /** Hull sky-reflection strength in flight, and once held in the arms (after cutoff). */
 export const HULL_ENV = 0.95;
 export const HULL_ENV_HELD = 0.6;
 /** CSS px: the smallest the ring may look on screen (far lenses grow it to this). */
 const RING_MIN_PX = 24;
+/** Degrees: a lens flatter than this over the ring plane sees the ring tilted toward it. */
+export const RING_MIN_VIEW_DEG = 30;
+/** The flat ring: the torus (built in the xy plane) laid in the horizontal plane. */
+const RING_FLAT_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+const RING_UP = new THREE.Vector3(0, 1, 0);
+const ringN = new THREE.Vector3();
+const ringTiltQ = new THREE.Quaternion();
+
+/**
+ * The ring pose for one lens. Returns the scale (the ring is at least RING_MIN_PX across on
+ * screen) and writes the orientation to `outQ`. A low lens (the beach long lens sees the ring
+ * from almost level) would see the flat torus edge-on, as a thin dash: the ring tilts toward
+ * the lens until it looks at least RING_MIN_VIEW_DEG open. The ring centre does not move.
+ */
+export function ringPoseFor(
+  camPos: THREE.Vector3,
+  fovDeg: number,
+  heightPx: number,
+  ringPos: THREE.Vector3,
+  baseScale: number,
+  outQ: THREE.Quaternion,
+): number {
+  const r = baseScale * RING_UNIT;
+  const d = Math.max(1, camPos.distanceTo(ringPos));
+  const px = ((r / (d * Math.tan((fovDeg * Math.PI) / 360))) * heightPx) / 2; // radius in px
+  const k = px > 1e-6 && 2 * px < RING_MIN_PX ? RING_MIN_PX / (2 * px) : 1;
+  const vx = camPos.x - ringPos.x;
+  const vy = camPos.y - ringPos.y;
+  const vz = camPos.z - ringPos.z;
+  const horiz = Math.hypot(vx, vz);
+  const elev = Math.atan2(vy, horiz); // + above the ring plane, - below it
+  const min = (RING_MIN_VIEW_DEG * Math.PI) / 180;
+  if (horiz < 1e-6 || Math.abs(elev) >= min) {
+    outQ.copy(RING_FLAT_Q);
+  } else {
+    // Turn the ring's normal toward the lens (away from it for a lens below the plane).
+    const t = min - Math.abs(elev);
+    const s = (elev >= 0 ? 1 : -1) * Math.sin(t);
+    ringN.set((vx / horiz) * s, Math.cos(t), (vz / horiz) * s);
+    ringTiltQ.setFromUnitVectors(RING_UP, ringN);
+    outQ.copy(ringTiltQ).multiply(RING_FLAT_Q);
+  }
+  return baseScale * k;
+}
 /** Ring tint per tolerance: in the window, near its edge, outside it. */
 const RING_TONE: Record<FrameState['aids']['tone'], string> = { ok: '#5fffd0', warn: '#ffd25e', bad: '#ff8a7a' };
 
@@ -385,7 +431,7 @@ export class WorldScene {
     this.nozzleGlow = new THREE.Sprite(
       new THREE.SpriteMaterial({
         map: makeGlowTexture(),
-        color: new THREE.Color().setRGB(3, 1.6, 0.7),
+        color: new THREE.Color().setRGB(...NOZZLE_GLOW_RGB),
         blending: THREE.AdditiveBlending,
         transparent: true,
         depthWrite: false,
@@ -431,7 +477,7 @@ export class WorldScene {
       new THREE.TorusGeometry(RING_UNIT, RING_UNIT * 0.06, 8, 96),
       new THREE.MeshBasicMaterial({ color: '#5fffd0', transparent: true, opacity: 0.85, depthWrite: false, depthTest: false, fog: false }),
     );
-    this.ring.rotation.x = Math.PI / 2;
+    this.ring.quaternion.copy(RING_FLAT_Q);
     this.ring.position.set(0, RAIL_Y + 0.4, 0);
     this.ring.renderOrder = 20;
     this.ring.frustumCulled = false;
@@ -514,9 +560,11 @@ export class WorldScene {
         if (inSite) c.lerp(site, 0.55);
         // Fine grain times a low-frequency swell, so no area reads as a flat fill.
         const n = (0.9 + 0.2 * fbm2(x / 6, z / 6)) * (0.84 + 0.32 * fbm2(x / 380 + 3, z / 520 - 2));
-        col[o] = c.r * n;
-        col[o + 1] = c.g * n;
-        col[o + 2] = c.b * n;
+        // A gentle hue drift (rosier and greyer patches), so the dry land is not one flat beige.
+        const hue = fbm2(x / 170 - 7, z / 230 + 5) - 0.5;
+        col[o] = c.r * n * (1 + 0.1 * hue);
+        col[o + 1] = c.g * n * (1 - 0.02 * hue);
+        col[o + 2] = c.b * n * (1 - 0.12 * hue);
       }
     }
     const idx: number[] = [];
@@ -963,15 +1011,13 @@ export class WorldScene {
 
   /**
    * On a far lens the target ring is a few pixels wide: grow it (for this camera only) to at
-   * least RING_MIN_PX across on screen. Call after the camera has moved, before rendering.
+   * least RING_MIN_PX across on screen. On a low lens, tilt it toward the camera so it reads
+   * as a ring, not an edge-on dash (see ringPoseFor). Call after the camera has moved, before
+   * rendering.
    */
   fitRingToCamera(cam: THREE.PerspectiveCamera, heightPx: number): void {
     if (!this.ring.visible) return;
-    const r = this.ringScale * RING_UNIT;
-    const d = Math.max(1, cam.position.distanceTo(this.ring.position));
-    const px = ((r / (d * Math.tan((cam.fov * Math.PI) / 360))) * heightPx) / 2; // radius in px
-    const k = px > 1e-6 && 2 * px < RING_MIN_PX ? RING_MIN_PX / (2 * px) : 1;
-    this.ring.scale.setScalar(this.ringScale * k);
+    this.ring.scale.setScalar(ringPoseFor(cam.position, cam.fov, heightPx, this.ring.position, this.ringScale, this.ring.quaternion));
   }
 
   /**
@@ -1038,7 +1084,8 @@ export class WorldScene {
       const level = levels[i] ?? 0;
       const [x, z] = this.layout[i] ?? [0, 0];
       const thr = e ? e.throttle : 0;
-      this.glows.setColorAt(i, level > 0 ? this.tmpC.setRGB(1 + 5 * level, 0.6 + 2.4 * level, 0.25 + 0.8 * level) : this.tmpC.setRGB(0.03, 0.03, 0.03));
+      // The nozzle exit glows orange, held at or below 1.0 so it keeps its hue (no white dot).
+      this.glows.setColorAt(i, level > 0 ? this.tmpC.setRGB(0.3 + 0.7 * level, 0.12 + 0.5 * level, 0.05 + 0.2 * level) : this.tmpC.setRGB(0.03, 0.03, 0.03));
       // 3 engines: a long pillar (about a booster length), as in the footage.
       const len = lit > 3 ? 20 + 8 * thr : 88 + 28 * thr;
       this.tmpM.compose(
@@ -1077,30 +1124,29 @@ export class WorldScene {
     eu['uTime']!.value = f.t * tm;
     cu['uTime']!.value = f.t * tm;
     this.plumeMany = many;
+    // Every plume colour stays at or below 1.0 (plumeTone), so tone mapping and bloom keep its
+    // hue; the brightness comes from the plume's area and the opacity of its shells.
+    const tone = plumeTone(many, heat, this.flash);
+    (eu['uCore']!.value as THREE.Color).setRGB(...tone.envCore);
+    (eu['uEdge']!.value as THREE.Color).setRGB(...tone.envEdge);
+    (eu['uTail']!.value as THREE.Color).setRGB(...tone.envTail);
+    (cu['uCore']!.value as THREE.Color).setRGB(...tone.coreCore);
+    (cu['uEdge']!.value as THREE.Color).setRGB(...tone.coreEdge);
+    cu['uDiamonds']!.value = tone.diamonds;
+    eu['uIntensity']!.value = tone.envIntensity;
+    cu['uIntensity']!.value = tone.coreIntensity;
     if (many) {
-      // Thirteen engines: a big flame, held below white so it keeps its colour. The edge is
-      // a saturated yellow-orange (almost no blue), the core a warm gold.
+      // Thirteen engines: a big orange flame that fades to cream smoke.
       const w = (0.55 + 0.45 * (lit / ENGINE_COUNT)) * spread;
       this.envelope.scale.set(15 * w, 70 + 25 * heat, 15 * w);
-      eu['uIntensity']!.value = (0.42 + 0.36 * heat) * (1 + this.flash * 1.5);
       eu['uChaos']!.value = 1;
-      (eu['uCore']!.value as THREE.Color).setRGB(1.6, 0.95, 0.42);
-      (eu['uEdge']!.value as THREE.Color).setRGB(1.3, 0.62, 0.05);
-      cu['uDiamonds']!.value = 0.35;
       cu['uCells']!.value = 4;
-      cu['uIntensity']!.value = 0.62 + 0.3 * heat;
     } else {
-      // Three engines: a tight hot pillar, white-gold core falling off to orange. A dimmer
-      // shell lets the shock diamonds (Mach disks) read clearly.
-      // A long pillar with a warm pink-orange core and shell (the footage's 3-engine look).
+      // Three engines: one long, continuous salmon (pink-orange) pillar with subtle shock
+      // diamonds (the footage's 3-engine look).
       this.envelope.scale.set(3.6 * spread, 110 + 20 * heat, 3.6 * spread);
-      eu['uIntensity']!.value = (0.3 + 0.2 * heat) * (1 + this.flash);
       eu['uChaos']!.value = 0.25;
-      (eu['uCore']!.value as THREE.Color).setRGB(1.9, 1.12, 0.88);
-      (eu['uEdge']!.value as THREE.Color).setRGB(1.45, 0.5, 0.36);
-      cu['uDiamonds']!.value = 2.4;
       cu['uCells']!.value = 6.5 + 0.4 * Math.sin(f.t * 5.3 * tm);
-      cu['uIntensity']!.value = 0.95 + 0.35 * heat;
     }
     this.envI = eu['uIntensity']!.value as number;
     this.coreI = cu['uIntensity']!.value as number;
@@ -1291,6 +1337,8 @@ export class WorldScene {
       const fl = Math.min(1, Math.max(0, a.flash));
       this.ringScale = (a.ringRadius / RING_UNIT) * (1 + (f.reducedMotion ? 0.08 : 0.3) * fl);
       this.ring.scale.setScalar(this.ringScale);
+      // Flat until a lens fits it (the split panels and the inset see the flat ring).
+      this.ring.quaternion.copy(RING_FLAT_Q);
       const pulse = f.reducedMotion ? 0.85 : 0.7 + 0.25 * Math.sin(f.t * 4);
       const rm = this.ring.material as THREE.MeshBasicMaterial;
       rm.opacity = Math.min(1, pulse + fl);

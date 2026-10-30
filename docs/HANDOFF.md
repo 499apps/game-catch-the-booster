@@ -231,6 +231,37 @@ I could not run any tools. Nothing in c8 is verified.
 
 **Baselines:** the beach divert framing, the tutorial layout, the plumes and the Cadet strip all change the visual baselines. Regenerate them only after the e2e run passes.
 
+## c9: gate-5 polish (findings 2, 3, 5, 6 and 7)
+
+I could not run node, pnpm or git (the brief did not allow it). Nothing in c9 is verified.
+
+| # | Finding | Fix | Files |
+| --- | --- | --- | --- |
+| 3 | Plume renders as white dots | New pure function `plumeTone(many, heat, flash)`. Every plume colour (envelope core, edge and tail, core core and edge, nozzle glow, nozzle discs) is 1.0 or less per channel. The colours have low green and blue, so ACES keeps the hue. The shaders clamp the opacity to 1 and add `col × a` (it was `col × a²`, with `a` up to about 7 at a diamond). A diamond now moves the colour toward `uCore` and adds a little opacity. It never adds light past the uniform. The core shell between the diamonds is more opaque (`0.6 + 0.4·core`, slower fade), so the 3-engine plume is one salmon pillar. The 13-engine plume is an orange flame with a cream smoke tail. | `src/render/materials.ts`, `src/render/scene.ts` |
+| 2 | Ring is an edge-on sliver on the beach lens | New pure function `ringPoseFor`. When the lens is less than 30° over the ring plane, the ring tilts toward the lens until it looks 30° open. The centre does not move. Split panels and the inset see the flat ring. | `src/render/scene.ts` |
+| 5 | Sky streaks and flat land | The stratus noise has a lower frequency, wider band edges and half the contrast. A band is never darker than the sky behind it (`max(lowCol, c)`). The dry land has a gentle hue drift (rosier and greyer patches), made once at start-up. | `src/render/materials.ts`, `src/render/scene.ts` |
+| 6 | Phone split replay | On touch, `#captions` is hidden in split view. The game measures how much of the bottom panels the replay bar covers. `renderSplit` shifts the frustum of the 2 bottom panels (`setViewOffset`) so the picture moves up by that height (40% of the panel at most). | `src/render/view.ts`, `src/app/game.ts`, `src/ui/styles.css` |
+| 7 | Skip pill on the strip; banner on the GO chip | A `ResizeObserver` writes the strip's lower edge to `--strip-bottom`. The touch pill sits 8 px under the strip, at its right edge. In the touch tutorial, the steer banner wraps 132 px before the strip's right edge, so it does not go under the pill. On desktop, the steer banner ends 72 px before the strip centre, before the GO chip. The keyboard lesson now reads "Hold A, D, W or S the way the arrow points". | `src/app/game.ts`, `src/ui/styles.css` |
+
+**New tests:**
+
+- `render.test.ts`, "plume colours keep their hue": every plume colour and strength is in 0..1 for every throttle, heat and flash value. A second test checks the hues (salmon for 3 engines, orange and cream for 13).
+- `render.test.ts`, "beach lens: the catch ring reads as a ring": the projected minor axis is 10 px or more at 1280x720 and at 393x852, from +13 s to +20 s of a Cadet flight. A lens high over the ring sees it flat.
+- `ux.spec.ts`, "touch tutorial: the Skip pill sits under the strip": on `iphone-15` (393x852) and `pixel-7` (412x915), the pill box does not intersect the strip box, and it does not cover the steer banner.
+
+**Not done:**
+
+- The hue check on the plume pixels in `capture.mjs` (finding 3, optional). Look at `*-divert.png` and `*-cadet-steer.png` by eye.
+- The playtest (finding 1) and the clean e2e rerun with `--workers=1` (finding 4).
+- The Pixel 3-row strip (finding 9).
+
+**Risks:**
+
+- The plume is now dimmer per layer. If it reads too dim, raise `envIntensity` or `coreIntensity` in `plumeTone`. Keep them at 1.0 or less (the unit test checks this).
+- The tilted ring no longer lies in the plane of the arms on the beach lens. It is an aid, not a part of the tower.
+
+**Baselines:** the plume, the sky, the land, the ring and the tutorial pill change the visual baselines. Regenerate them only after the e2e run passes.
+
 ## Commands for the operator (in order)
 
 1. `pnpm typecheck`

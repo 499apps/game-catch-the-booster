@@ -237,9 +237,11 @@ export class View {
 
   /**
    * Replay split screen: four synced cameras in a 2x2 grid on one frame of the world.
-   * Direct renders (no post), so four views stay inside the frame budget.
+   * Direct renders (no post), so four views stay inside the frame budget. `bottomInset` (CSS
+   * px): the replay bar covers this much of the bottom row, so those panels aim that much
+   * higher on screen (the tower in WIDE BAY stays clear of the bar).
    */
-  renderSplit(frame: FrameState, cams: readonly CameraId[], shot: ShotInput, dt: number, snap: boolean): void {
+  renderSplit(frame: FrameState, cams: readonly CameraId[], shot: ShotInput, dt: number, snap: boolean, bottomInset = 0): void {
     const r = this.renderer;
     r.info.reset();
     this.world.update(frame);
@@ -264,9 +266,13 @@ export class View {
       // panel it can drift onto empty sky. Aim it at the booster there.
       if (id === 'beach') rig.camera.lookAt(shot.com.x, shot.com.y, shot.com.z);
       this.world.tuneForCamera(rig.camera.position);
+      // Bottom row: shift the frustum down, so the picture moves up by the bar's height.
+      const lift = i >= 2 ? Math.min(Math.round(bottomInset), Math.round(h * 0.4)) : 0;
+      if (lift > 0) rig.camera.setViewOffset(w, h, 0, lift, w, h);
       r.setViewport(x, y, w, h);
       r.setScissor(x, y, w, h);
       r.render(this.world.scene, rig.camera);
+      if (lift > 0) rig.camera.clearViewOffset();
     });
     r.setScissorTest(false);
     r.setViewport(0, 0, this.width, this.height);

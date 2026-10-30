@@ -18,10 +18,10 @@ import {
 import { rotateStick } from '../../src/input/mapping';
 import { FINAL_APPROACH_HEIGHT, TILT_ABORT_DEG, cadetPinTone, pinTone, tiltTone } from '../../src/ui/tolerance';
 import { WATERLINE_X, terrainHeight } from '../../src/render/terrain';
-import { HULL_TONE } from '../../src/render/materials';
-import { HULL_ENV, HULL_ENV_HELD } from '../../src/render/scene';
+import { HULL_TONE, NOZZLE_GLOW_RGB, plumeTone } from '../../src/render/materials';
+import { HULL_ENV, HULL_ENV_HELD, RING_UNIT, ringPoseFor } from '../../src/render/scene';
 import { autopilotCommand } from '../../src/sim/autopilot';
-import { BOOSTER_LENGTH, COM_ABOVE_BASE, PIN_ABOVE_COM, RAIL_Y, TOWER_HEIGHT, TOWER_X } from '../../src/sim/constants';
+import { BOOSTER_DIAMETER, BOOSTER_LENGTH, COM_ABOVE_BASE, PIN_ABOVE_COM, RAIL_Y, TOWER_HEIGHT, TOWER_X } from '../../src/sim/constants';
 import type { TierId } from '../../src/sim/tiers';
 import { axisFromTilt } from '../../src/sim/vec';
 import { createWorld, stepWorld, tauOf } from '../../src/sim/world';
@@ -215,6 +215,119 @@ describe('beach lens in the divert: tight framing', () => {
       expect(checked).toBeGreaterThan(10);
     });
   }
+});
+
+/** Full minor axis (px) of the ellipse through evenly spaced points of a projected circle. */
+function minorAxisPx(pts: readonly THREE.Vector2[]): number {
+  const n = pts.length;
+  let mx = 0;
+  let my = 0;
+  for (const p of pts) {
+    mx += p.x / n;
+    my += p.y / n;
+  }
+  let sxx = 0;
+  let syy = 0;
+  let sxy = 0;
+  for (const p of pts) {
+    sxx += ((p.x - mx) * (p.x - mx)) / n;
+    syy += ((p.y - my) * (p.y - my)) / n;
+    sxy += ((p.x - mx) * (p.y - my)) / n;
+  }
+  // An affine image of a circle, sampled evenly in angle, has covariance = semi-axis^2 / 2.
+  const lMin = (sxx + syy) / 2 - Math.sqrt(((sxx - syy) / 2) ** 2 + sxy * sxy);
+  return 2 * Math.sqrt(2 * Math.max(0, lMin));
+}
+
+describe('beach lens: the catch ring reads as a ring, not an edge-on dash', () => {
+  for (const [label, width, height] of [
+    ['1280x720', 1280, 720],
+    ['393x852', 393, 852],
+  ] as const) {
+    it(`projected minor axis >= 10 px from +13 s to +20 s, ${label}`, () => {
+      const w = createWorld(1, 'cadet');
+      const rig = new CameraRig('beach', width / height);
+      const ringPos = new THREE.Vector3(0, RAIL_Y + 0.4, 0);
+      const base = (BOOSTER_DIAMETER / 2 + w.cfg.pinWindow) / RING_UNIT;
+      const q = new THREE.Quaternion();
+      let checked = 0;
+      let guard = 0;
+      while (!w.done && guard++ < 120 * 60) {
+        stepWorld(w, autopilotCommand(w));
+        const tau = tauOf(w);
+        if (tau === null || tau < 13 || tau > 20 || w.step % 30 !== 0) continue;
+        rig.update({ com: w.pos, axis: axisFromTilt(w.tilt), thrustFrac: 0.3, t: w.t, reducedMotion: true, divert: true }, 0, true);
+        const c = rig.camera;
+        c.updateMatrixWorld();
+        const scale = ringPoseFor(c.position, c.fov, height, ringPos, base, q);
+        // A far lens only grows the ring, never shrinks it.
+        expect(scale).toBeGreaterThanOrEqual(base);
+        const pts: THREE.Vector2[] = [];
+        for (let k = 0; k < 72; k++) {
+          const a = (k / 72) * Math.PI * 2;
+          const p = new THREE.Vector3(Math.cos(a), Math.sin(a), 0)
+            .multiplyScalar(RING_UNIT * scale)
+            .applyQuaternion(q)
+            .add(ringPos)
+            .project(c);
+          pts.push(new THREE.Vector2(((p.x + 1) / 2) * width, ((1 - p.y) / 2) * height));
+        }
+        const minor = minorAxisPx(pts);
+        expect(minor, `tau ${tau.toFixed(1)}: minor axis ${minor.toFixed(1)} px`).toBeGreaterThanOrEqual(10);
+        checked++;
+      }
+      expect(checked).toBeGreaterThan(10);
+    });
+  }
+
+  it('a lens high over the ring sees it flat (no tilt)', () => {
+    const q = new THREE.Quaternion();
+    const ringPos = new THREE.Vector3(0, RAIL_Y + 0.4, 0);
+    ringPoseFor(new THREE.Vector3(30, RAIL_Y + 200, 0), 50, 720, ringPos, 1, q);
+    // The flat ring's normal (torus z axis) is vertical.
+    const n = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+    expect(Math.abs(n.y)).toBeCloseTo(1, 6);
+  });
+});
+
+describe('plume colours keep their hue: nothing past 1.0 for tone mapping and bloom to clip', () => {
+  it('every plume colour and strength stays in 0..1 for every throttle, heat and flash value', () => {
+    const heats: number[] = [-0.5, 1.4, 2];
+    for (let thr = 0; thr <= 1.0001; thr += 0.05) heats.push(Math.min(1, thr * 1.4)); // as in scene.update
+    for (const many of [false, true]) {
+      for (const heat of heats) {
+        for (const flash of [0, 0.3, 1, 3]) {
+          const t = plumeTone(many, heat, flash);
+          const at = `${many ? 13 : 3} engines, heat ${heat.toFixed(2)}, flash ${flash}`;
+          for (const k of [t.diamonds, t.envIntensity, t.coreIntensity]) {
+            expect(k, at).toBeGreaterThanOrEqual(0);
+            expect(k, at).toBeLessThanOrEqual(1);
+          }
+          for (const col of [t.envCore, t.envEdge, t.envTail, t.coreCore, t.coreEdge, NOZZLE_GLOW_RGB]) {
+            for (const v of col) {
+              expect(v, at).toBeGreaterThanOrEqual(0);
+              expect(v, at).toBeLessThanOrEqual(1);
+              // After the multipliers: the shaders add colour x clamped opacity (x intensity).
+              expect(v * Math.max(t.envIntensity, t.coreIntensity), at).toBeLessThanOrEqual(1);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it('3 engines: salmon (pink-orange); 13 engines: an orange flame with a cream smoke tail', () => {
+    const three = plumeTone(false, 1, 0);
+    for (const c of [three.envCore, three.coreCore]) {
+      expect(c[1]).toBeLessThan(0.55 * c[0]); // not white or yellow
+      expect(c[2]).toBeGreaterThan(0.45 * c[1]); // a pink lean, not pure orange
+    }
+    expect(three.diamonds).toBeLessThanOrEqual(0.6); // subtle diamonds
+    const many = plumeTone(true, 1, 0);
+    expect(many.envCore[1]).toBeLessThan(0.5 * many.envCore[0]);
+    expect(many.envCore[2]).toBeLessThan(0.15); // orange: almost no blue
+    expect(many.envTail[2]).toBeGreaterThan(0.5 * many.envTail[0]); // cream smoke
+  });
 });
 
 describe('auto-director holds the shot while the player steers', () => {

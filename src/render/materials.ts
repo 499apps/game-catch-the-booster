@@ -67,12 +67,14 @@ const SKY_GLSL = /* glsl */ `
     // Uniform branches: cheap tiers skip the cirrus, and pixels outside the bands skip the noise.
     if (clouds && uClouds > 0.0 && h > 0.01 && h < 0.7) {
       vec2 p = d.xz / max(h, 0.02);
-      if (h < 0.16) {
-        float n = fbm3(vec3(p * vec2(0.55, 1.6), 0.0));
-        float band = smoothstep(0.012, 0.04, h) * (1.0 - smoothstep(0.07, 0.16, h));
-        float low = smoothstep(0.58, 0.78, n) * band;
-        vec3 lowCol = mix(vec3(0.16, 0.12, 0.16), vec3(1.6, 0.78, 0.38), pow(s, 6.0));
-        c = mix(c, lowCol, low * 0.85);
+      if (h < 0.2) {
+        // Soft stratus: a lower noise frequency (no horizontal scanlines near the horizon), wide
+        // band edges, low contrast, and never darker than the sky behind it.
+        float n = fbm3(vec3(p * vec2(0.32, 0.9), 0.0));
+        float band = smoothstep(0.006, 0.07, h) * (1.0 - smoothstep(0.05, 0.2, h));
+        float low = smoothstep(0.48, 0.86, n) * band;
+        vec3 lowCol = mix(c * vec3(1.06, 1.0, 1.02) + vec3(0.025, 0.018, 0.022), vec3(1.25, 0.66, 0.36), pow(s, 6.0));
+        c = mix(c, max(lowCol, c), low * 0.5);
       }
       if (uClouds > 0.75 && h > 0.08) {
         float hi = smoothstep(0.55, 0.9, fbm3(vec3(p * vec2(0.08, 0.5), 3.0)));
@@ -318,6 +320,58 @@ export function makeWetSandMaterial(shoreX: number): THREE.ShaderMaterial {
 
 // ---------------------------------------------------------------- plume
 
+type RGB = readonly [number, number, number];
+
+/** Colours and strengths for the plume shaders (every value 0..1; see plumeTone). */
+export interface PlumeTone {
+  envCore: RGB;
+  envEdge: RGB;
+  envTail: RGB;
+  coreCore: RGB;
+  coreEdge: RGB;
+  /** Shock-diamond strength (lifts the core toward uCore; it never adds light past it). */
+  diamonds: number;
+  envIntensity: number;
+  coreIntensity: number;
+}
+
+/** The nozzle glow sprite colour (held at or below 1.0, so it keeps its hue). */
+export const NOZZLE_GLOW_RGB: RGB = [1.0, 0.42, 0.16];
+
+/**
+ * Plume colours for the 13-engine and the 3-engine burn. Every channel stays at or below 1.0
+ * after the heat and flash multipliers, so tone mapping and bloom cannot clip the plume to
+ * white: the brightness comes from area and overlap, and the colours are saturated enough
+ * (low green and blue) to keep their hue through ACES. 3 engines: one continuous salmon
+ * (pink-orange) pillar with subtle diamonds. 13 engines: an orange flame fading to cream smoke.
+ */
+export function plumeTone(many: boolean, heat: number, flash: number): PlumeTone {
+  const h = Math.min(1, Math.max(0, heat));
+  const fl = Math.min(1, Math.max(0, flash));
+  if (many) {
+    return {
+      envCore: [1.0, 0.42, 0.09],
+      envEdge: [1.0, 0.27, 0.035],
+      envTail: [0.62, 0.52, 0.4],
+      coreCore: [1.0, 0.55, 0.17],
+      coreEdge: [1.0, 0.33, 0.06],
+      diamonds: 0.25,
+      envIntensity: Math.min(1, (0.4 + 0.3 * h) * (1 + fl)),
+      coreIntensity: Math.min(1, 0.3 + 0.15 * h),
+    };
+  }
+  return {
+    envCore: [1.0, 0.36, 0.22],
+    envEdge: [1.0, 0.25, 0.15],
+    envTail: [0.7, 0.21, 0.15],
+    coreCore: [1.0, 0.47, 0.29],
+    coreEdge: [1.0, 0.3, 0.18],
+    diamonds: 0.5,
+    envIntensity: Math.min(1, (0.42 + 0.18 * h) * (1 + 0.5 * fl)),
+    coreIntensity: Math.min(1, 0.3 + 0.12 * h),
+  };
+}
+
 /** Turbulent outer envelope (13 engines: wide and chaotic; 3 engines: a tight pillar). */
 export function makePlumeEnvelopeMaterial(): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
@@ -327,9 +381,9 @@ export function makePlumeEnvelopeMaterial(): THREE.ShaderMaterial {
     side: THREE.DoubleSide,
     fog: false,
     uniforms: {
-      uCore: { value: new THREE.Color().setRGB(1.6, 1.25, 0.75) },
-      uEdge: { value: new THREE.Color().setRGB(1.2, 0.48, 0.12) },
-      uTail: { value: new THREE.Color().setRGB(0.45, 0.16, 0.06) },
+      uCore: { value: new THREE.Color().setRGB(1.0, 0.42, 0.09) },
+      uEdge: { value: new THREE.Color().setRGB(1.0, 0.27, 0.035) },
+      uTail: { value: new THREE.Color().setRGB(0.62, 0.52, 0.4) },
       uIntensity: { value: 1 },
       uTime: { value: 0 },
       uChaos: { value: 1 },
@@ -366,14 +420,15 @@ export function makePlumeEnvelopeMaterial(): THREE.ShaderMaterial {
       void main() {
         float along = vUv.y;
         float n = fbm3(vec3(vPos.x * 4.0, vPos.y * 7.0 + uTime * 9.0, vPos.z * 4.0));
-        float turb = mix(0.75, smoothstep(0.2, 0.85, n) * 1.5, uChaos);
-        float body = pow(1.0 - along, 1.25) * smoothstep(0.0, 0.06, along + 0.01);
-        float rim = pow(vFacing, 1.4);
+        float turb = mix(0.8, smoothstep(0.2, 0.85, n) * 1.4, uChaos);
+        float body = pow(1.0 - along, 1.1) * smoothstep(0.0, 0.06, along + 0.01);
+        float rim = pow(vFacing, 1.2);
         vec3 col = mix(uEdge, uCore, clamp((1.0 - along * 1.6) * rim, 0.0, 1.0));
         col = mix(col, uTail, smoothstep(0.35, 1.0, along));
-        float a = body * rim * turb * uIntensity;
+        // Additive (src alpha, one): this adds col * a, never more than the colour itself.
+        float a = clamp(body * rim * turb * uIntensity, 0.0, 1.0);
         float fogAtt = exp(-pow(vDist * uFogDensity, 2.0));
-        gl_FragColor = vec4(col * a * fogAtt, a);
+        gl_FragColor = vec4(min(col, vec3(1.0)) * fogAtt, a);
       }
     `,
   });
@@ -388,11 +443,11 @@ export function makePlumeCoreMaterial(): THREE.ShaderMaterial {
     side: THREE.DoubleSide,
     fog: false,
     uniforms: {
-      uCore: { value: new THREE.Color().setRGB(2.2, 2.0, 1.75) },
-      uEdge: { value: new THREE.Color().setRGB(1.5, 0.72, 0.3) },
-      uIntensity: { value: 1 },
+      uCore: { value: new THREE.Color().setRGB(1.0, 0.47, 0.29) },
+      uEdge: { value: new THREE.Color().setRGB(1.0, 0.3, 0.18) },
+      uIntensity: { value: 0.3 },
       uTime: { value: 0 },
-      uDiamonds: { value: 1 },
+      uDiamonds: { value: 0.5 },
       uCells: { value: 5 },
       uFogDensity: { value: FOG_DENSITY },
     },
@@ -423,18 +478,20 @@ export function makePlumeCoreMaterial(): THREE.ShaderMaterial {
       varying float vDist;
       void main() {
         float along = vUv.y;
-        float core = pow(vFacing, 2.2);
-        float fade = pow(1.0 - along, 1.6);
+        float core = pow(vFacing, 2.0);
+        float fade = pow(1.0 - along, 1.15);
         float k = along * uCells;
         float cell = fract(k);
-        float disk = exp(-pow((cell - 0.18) * 8.0, 2.0)) * (1.0 - smoothstep(0.55, 0.95, along));
+        float disk = exp(-pow((cell - 0.18) * 7.0, 2.0)) * (1.0 - smoothstep(0.55, 0.95, along));
         float pulse = 0.85 + 0.15 * sin(uTime * 47.0 + floor(k) * 1.7);
         float shimmer = 0.9 + 0.1 * sin(uTime * 83.0 + along * 37.0);
-        vec3 col = mix(uEdge, uCore, clamp(core * (1.15 - along), 0.0, 1.0));
-        float a = (fade * (0.3 + 0.7 * core) + disk * uDiamonds * core * 1.8 * pulse) * uIntensity * shimmer;
-        col += uCore * disk * uDiamonds * 0.8;
+        float dia = disk * uDiamonds * core * pulse;
+        // A continuous shell between the diamonds (one pillar, not a row of dots). A diamond only
+        // shifts the colour toward uCore and adds a little opacity: never past the uniforms.
+        vec3 col = mix(uEdge, uCore, clamp(core * (1.15 - along) + dia, 0.0, 1.0));
+        float a = clamp((fade * (0.6 + 0.4 * core) + dia * 0.5) * uIntensity * shimmer, 0.0, 1.0);
         float fogAtt = exp(-pow(vDist * uFogDensity, 2.0));
-        gl_FragColor = vec4(col * a * fogAtt, a);
+        gl_FragColor = vec4(min(col, vec3(1.0)) * fogAtt, a);
       }
     `,
   });

@@ -45,6 +45,34 @@ test('phone strip: no chip, value or cell clips its own text during the flight',
   }
 });
 
+test('touch tutorial: the Skip pill sits under the strip, never on its STOP value or clock', async ({ page }, info) => {
+  test.skip(info.project.name !== 'iphone-15' && info.project.name !== 'pixel-7', 'The pill layout is for phones (393x852, 412x915).');
+  await openGame(page, 'still=1&tier=cadet&seed=1&tutorial=1');
+  const pill = page.getByTestId('tutorial-skip');
+  const strip = page.getByTestId('telemetry');
+  await expect(pill).toBeVisible();
+  await expect(strip).toBeVisible();
+  // The pill docks under the strip once the strip reports its height (a ResizeObserver): poll.
+  await expect
+    .poll(async () => {
+      const p = await pill.boundingBox();
+      const s = await strip.boundingBox();
+      if (!p || !s) return 'no box';
+      if (overlaps(p, s)) return `pill (${p.x}, ${p.y}, ${p.width}x${p.height}) on the strip (${s.x}, ${s.y}, ${s.width}x${s.height})`;
+      return p.y >= s.y + s.height - 1 ? 'under' : 'above';
+    })
+    .toBe('under');
+  const p = await pill.boundingBox();
+  const vp = page.viewportSize();
+  if (p && vp) expect(p.x + p.width).toBeLessThanOrEqual(vp.width + 1);
+  // And the steer banner (the lesson) wraps before the pill.
+  const cue = page.getByTestId('steer-cue');
+  if (p && (await cue.isVisible())) {
+    const c = await cue.boundingBox();
+    if (c) expect(overlaps(p, c), 'the pill covers the steer banner').toBe(false);
+  }
+});
+
 test('M toggles the sound, and the Real facts card is in the left menu', async ({ page }) => {
   await openGame(page);
   const before = (await state(page)).muted;

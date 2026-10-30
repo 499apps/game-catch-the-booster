@@ -80,7 +80,7 @@ const CAMERA_SHORT: Record<CameraId, string> = { towerTop: 'TOWER', beach: 'BEAC
 /** The tutorial steer lesson, as shown in the steer banner next to the arrow. */
 const STEER_LESSON: Record<InputKind, string> = {
   touch: 'Drag the pad the way the arrow points',
-  keys: 'Hold the arrow key (or WASD) the arrow points to',
+  keys: 'Hold A, D, W or S the way the arrow points',
   pad: 'Push the stick the way the arrow points',
 };
 /** s: a pushed stick that has not moved the Cadet aim for this long shows "Other way". */
@@ -261,6 +261,10 @@ export class Game {
   private readonly menuBackdrop: World;
   private readonly motionQuery: MediaQueryList | null;
   private loaderGone = false;
+  /** CSS px of the bottom split panels under the replay bar (-1: measure again). */
+  private splitInset = -1;
+  /** Keeps --strip-bottom (the strip's lower edge) current for the touch Skip pill. */
+  private stripObserver: ResizeObserver | null = null;
 
   constructor(
     private readonly app: HTMLElement,
@@ -305,6 +309,15 @@ export class Game {
       () => this.tutorial?.skip(),
       () => this.tutorial?.skipStep(),
     );
+    // Touch: the "Skip tutorial" pill docks under the strip, whose height changes with the
+    // tier and the screen width (2 rows on an iPhone, 3 on a Pixel).
+    const strip = app.querySelector<HTMLElement>('#telemetry');
+    if (strip && typeof ResizeObserver !== 'undefined') {
+      this.stripObserver = new ResizeObserver(() => {
+        if (strip.offsetHeight > 0) app.style.setProperty('--strip-bottom', `${strip.offsetTop + strip.offsetHeight}px`);
+      });
+      this.stripObserver.observe(strip);
+    }
     this.replayBar = new ReplayBar(app, {
       onToggle: () => this.replay?.clock.toggle(),
       onSeek: (f) => this.seekReplay(f),
@@ -397,6 +410,8 @@ export class Game {
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     this.rafId = null;
     this.audio.pause();
+    this.stripObserver?.disconnect();
+    this.stripObserver = null;
     this.view?.dispose();
     this.view = null;
   }
@@ -1038,6 +1053,7 @@ export class Game {
     if (!r) return;
     r.split = !r.split;
     r.clock.setSplit(r.split);
+    this.splitInset = -1;
     this.splitLabels.hidden = !r.split;
     this.afterSeek();
   }
@@ -1296,7 +1312,7 @@ export class Game {
     if (this.app.classList.contains('flying')) this.app.classList.remove('flying');
     this.splitLabels.hidden = !rp.split;
     if (this.view) {
-      if (rp.split) this.view.renderSplit(frame, SPLIT_CAMS, shot, dt, snap);
+      if (rp.split) this.view.renderSplit(frame, SPLIT_CAMS, shot, dt, snap, Math.max(0, this.splitInset));
       else {
         if (this.camera !== this.lastCamera && !snap) this.view.rigs[this.camera].cut();
         this.lastCamera = this.camera;
@@ -1313,6 +1329,11 @@ export class Game {
     this.hud.update(this.replayHud(rp, f), this.realTime);
     this.replayBar.update(rp.clock, rp.split, rp.tl.ignitionT);
     if (this.app.classList.contains('split-view') !== rp.split) this.app.classList.toggle('split-view', rp.split);
+    if (rp.split && this.splitInset < 0) {
+      // How much of the bottom split panels the replay bar covers (measured once per layout).
+      const bar = this.replayBar.root.getBoundingClientRect();
+      this.splitInset = bar.height > 0 ? Math.max(0, this.app.getBoundingClientRect().bottom - bar.top) : 0;
+    }
     this.updateTestState();
   }
 
@@ -1503,6 +1524,7 @@ export class Game {
     const w = this.app.clientWidth || window.innerWidth;
     const h = this.app.clientHeight || window.innerHeight;
     this.view?.resize(w, h);
+    this.splitInset = -1;
     if (this.hooks.still) this.draw(0, true);
   }
 
