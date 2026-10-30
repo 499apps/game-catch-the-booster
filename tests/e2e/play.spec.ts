@@ -37,6 +37,9 @@ test('autopilot completes a catch, shows a scored debrief, and the replay matche
   await openGame(page, 'autopilot=1&timescale=8&seed=3');
   await startTier(page, 'cadet');
   await expect(page.getByTestId('debrief')).toBeVisible({ timeout: 25_000 });
+  // The debrief owns the screen: the flight HUD (strip, sticks, camera tag) is gone.
+  await expect(page.getByTestId('hud')).toHaveClass(/hidden/);
+  await expect(page.getByTestId('telemetry')).toBeHidden();
   const s = await state(page);
   expect(s.outcome?.caught).toBe(true);
   const score = s.score ?? 0;

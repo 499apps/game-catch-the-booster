@@ -1,8 +1,25 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { AutoDirector, CAMERA_IDS, CameraRig, TOWER_CAM, TOWER_TOP_LAYER, WIDE_CAM, fovToFit, type ShotInput } from '../../src/render/cameras';
+import {
+  AutoDirector,
+  CAMERA_IDS,
+  CameraRig,
+  SAFE_BOTTOM,
+  TOWER_CAM,
+  TOWER_TOP_LAYER,
+  WIDE_CAM,
+  fovToFit,
+  frameInSafe,
+  safeTop,
+  type CameraId,
+  type ShotInput,
+} from '../../src/render/cameras';
 import { WATERLINE_X, terrainHeight } from '../../src/render/terrain';
-import { RAIL_Y, TOWER_HEIGHT, TOWER_X } from '../../src/sim/constants';
+import { autopilotCommand } from '../../src/sim/autopilot';
+import { BOOSTER_LENGTH, COM_ABOVE_BASE, PIN_ABOVE_COM, RAIL_Y, TOWER_HEIGHT, TOWER_X } from '../../src/sim/constants';
+import type { TierId } from '../../src/sim/tiers';
+import { axisFromTilt } from '../../src/sim/vec';
+import { createWorld, stepWorld, tauOf } from '../../src/sim/world';
 import { CATCH_TIPS, TIPS, tipFor } from '../../src/sim/tips';
 
 describe('debrief tips depend on the result', () => {
@@ -128,10 +145,91 @@ describe('camera framing', () => {
     expect(new THREE.Vector3(0, 80, 0).project(c).x).toBeGreaterThan(0);
   });
 
+  it('frameInSafe puts every point below the HUD band and inside the frame', () => {
+    const pos = new THREE.Vector3(0, 2, 2000);
+    const pts = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 450, 0), new THREE.Vector3(30, 200, 0)];
+    for (const aspect of [16 / 9, 390 / 844]) {
+      const top = safeTop(aspect);
+      const f = frameInSafe(pos, pts, aspect, top, SAFE_BOTTOM, 1.1, 1, 60);
+      const cam = new THREE.PerspectiveCamera(f.fov, aspect, 1, 10000);
+      cam.position.copy(pos);
+      cam.lookAt(f.target);
+      cam.updateMatrixWorld();
+      for (const p of pts) {
+        const q = p.clone().project(cam);
+        expect(q.y).toBeLessThanOrEqual(1 - 2 * top + 1e-3);
+        expect(q.y).toBeGreaterThanOrEqual(-1 + 2 * SAFE_BOTTOM - 1e-3);
+        expect(Math.abs(q.x)).toBeLessThan(1);
+      }
+    }
+  });
+
   it('wide and beach cams stand on the ground, above the sand', () => {
     expect(WIDE_CAM.y).toBeGreaterThan(terrainHeight(WIDE_CAM.x, WIDE_CAM.z) + 1);
     expect(WIDE_CAM.x).toBeLessThan(WATERLINE_X);
   });
+});
+
+describe('auto-director shots keep the booster in the safe frame below the HUD', () => {
+  // HUD strip: top ~20% on desktop, ~28% on phones (strip + folded board).
+  const SCREENS: [string, number, number][] = [
+    ['desktop 1280x720', 1280 / 720, 0.2],
+    ['phone 393x852', 393 / 852, 0.28],
+  ];
+  const RUNS: [TierId, number][] = [
+    ['cadet', 1],
+    ['pilot', 3],
+    ['fd', 2],
+    ['fd', 7],
+  ];
+  for (const [label, aspect, hudTop] of SCREENS) {
+    for (const [tier, seed] of RUNS) {
+      it(`${tier} seed ${seed}, ${label}`, () => {
+        const w = createWorld(seed, tier);
+        const director = new AutoDirector();
+        const rigs = new Map<CameraId, CameraRig>();
+        let checked = 0;
+        let guard = 0;
+        while (!w.done && guard++ < 120 * 90) {
+          stepWorld(w, autopilotCommand(w));
+          if (w.step % 30 !== 0 || w.phase === 'splashdown') continue;
+          const tau = tauOf(w);
+          const id = director.update(w.phase, tau, w.arms.closing, null, w.t);
+          let rig = rigs.get(id);
+          if (!rig) {
+            rig = new CameraRig(id, aspect);
+            rigs.set(id, rig);
+          }
+          const axis = axisFromTilt(w.tilt);
+          rig.update({ com: w.pos, axis, thrustFrac: 0.3, t: w.t, reducedMotion: true }, 0, true);
+          const c = rig.camera;
+          c.updateMatrixWorld();
+          const at = (k: number): THREE.Vector3 => new THREE.Vector3(w.pos.x + axis.x * k, w.pos.y + axis.y * k, w.pos.z + axis.z * k);
+          const safe = (p: THREE.Vector3): boolean => {
+            const q = p.clone().project(c);
+            return q.z < 1 && Math.abs(q.x) < 1 && q.y > -1 && q.y < 1 - 2 * hudTop;
+          };
+          const where = `${id} at t=${w.t.toFixed(1)} (tau ${tau?.toFixed(1) ?? '-'})`;
+          if (id === 'towerTop') {
+            // A close wide lens: the booster never fits whole; its engine end or its pins must
+            // read once it is beside the arms (a no-go booster stays offshore, out of this lens).
+            // While it drops past the lens the hull spans the frame (engines at the bottom edge, pins
+            // just under the HUD), so check every 2 m of hull between the engines and the pins.
+            if (Math.hypot(w.pos.x, w.pos.z) < 120) {
+              let seen = false;
+              for (let k = -COM_ABOVE_BASE; k <= PIN_ABOVE_COM && !seen; k += 2) seen = safe(at(k));
+              expect(seen, where).toBe(true);
+            }
+          } else if (id !== 'onboard') {
+            expect(safe(at(0)), `CoM, ${where}`).toBe(true);
+            expect(safe(at(BOOSTER_LENGTH - COM_ABOVE_BASE - 2)), `nose, ${where}`).toBe(true);
+          }
+          checked++;
+        }
+        expect(checked).toBeGreaterThan(20);
+      });
+    }
+  }
 });
 
 describe('coast terrain', () => {

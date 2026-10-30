@@ -36,8 +36,23 @@ export const WIDE_CAM: Vec3 = { x: WATERLINE_X - 18, y: terrainHeight(WATERLINE_
 export const TOWER_CAM: Vec3 = { x: TOWER_X + 2, y: TOWER_HEIGHT + 9, z: -24 };
 /** Render layer for the tower-top structure: every camera sees it except the tower-top lens. */
 export const TOWER_TOP_LAYER = 1;
-/** Main-menu hero shot: low on the beach, close to the Catcher, looking up at the caught booster. */
-export const HERO_CAM: Vec3 = { x: WATERLINE_X - 12, y: terrainHeight(WATERLINE_X - 12, 330) + 2.2, z: 330 };
+/**
+ * Main-menu hero shot: low on the site, a three-quarter view from inland and up the coast,
+ * so both arms visibly wrap the caught booster and the low sun rims it from behind.
+ */
+// From (-90, 200) the line to the booster passes ~15 m clear of the tower column, so the
+// tower never hides the hull, and the arms are seen ~25 deg off their side.
+export const HERO_CAM: Vec3 = { x: TOWER_X - 74, y: terrainHeight(TOWER_X - 74, 200) + 2.4, z: 200 };
+
+/**
+ * Fraction of the frame height that the HUD covers at the top: the telemetry strip on
+ * desktop (~20%) and the strip with the folded board on phones (~28%), plus a margin.
+ */
+export function safeTop(aspect: number): number {
+  return aspect < 1 ? 0.3 : 0.22;
+}
+/** Bottom margin (camera tag, thumbs) kept clear of the subject. */
+export const SAFE_BOTTOM = 0.07;
 
 export interface ShotInput {
   com: Vec3;
@@ -47,10 +62,65 @@ export interface ShotInput {
   reducedMotion: boolean;
   /** Main menu: the wide rig takes the hero shot, framed right of the left rail. */
   hero?: boolean;
+  /** Seconds since the pins touched the rails (drives the settle bounce), or null. */
+  impact?: number | null;
 }
 
 const expK = (dt: number, tau: number): number => (tau <= 0 ? 1 : 1 - Math.exp(-dt / tau));
 const DEG = 180 / Math.PI;
+
+/**
+ * Aim and vertical fov that put every point inside the safe band of the frame:
+ * below the top `top` fraction (the HUD) and above the bottom `bottom` fraction.
+ * The lens is clamped to [minFov, maxFov] (deg); with a fixed lens it only re-aims.
+ */
+export function frameInSafe(
+  pos: THREE.Vector3,
+  pts: readonly THREE.Vector3[],
+  aspect: number,
+  top: number,
+  bottom: number,
+  margin: number,
+  minFov: number,
+  maxFov: number,
+): { target: THREE.Vector3; fov: number } {
+  const c = new THREE.Vector3();
+  for (const p of pts) c.add(p);
+  c.multiplyScalar(1 / Math.max(1, pts.length));
+  const dist = Math.max(1, c.distanceTo(pos));
+  const fwd = c.clone().sub(pos).normalize();
+  const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0));
+  if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
+  right.normalize();
+  const up = new THREE.Vector3().crossVectors(right, fwd);
+  let uMin = Infinity;
+  let uMax = -Infinity;
+  let rMax = 0;
+  const v = new THREE.Vector3();
+  for (const p of pts) {
+    v.copy(p).sub(pos);
+    const z = Math.max(1, v.dot(fwd));
+    const u = v.dot(up) / z;
+    uMin = Math.min(uMin, u);
+    uMax = Math.max(uMax, u);
+    rMax = Math.max(rMax, Math.abs(v.dot(right)) / z);
+  }
+  if (!Number.isFinite(uMin)) {
+    uMin = 0;
+    uMax = 0;
+  }
+  const yLo = -1 + 2 * bottom;
+  const yHi = 1 - 2 * top;
+  const cy = (yLo + yHi) / 2;
+  const h = Math.max(0.1, (yHi - yLo) / 2);
+  const need = Math.max((uMax - uMin) / 2 / h, rMax / (aspect * 0.9)) * margin;
+  const fov = THREE.MathUtils.clamp(2 * Math.atan(need) * DEG, minFov, maxFov);
+  const T = Math.tan(((fov / 2) * Math.PI) / 180);
+  // Tilt the aim so the content's middle lands on the middle of the safe band.
+  const a = Math.atan((uMin + uMax) / 2) - Math.atan(cy * T);
+  const aim = fwd.multiplyScalar(Math.cos(a)).addScaledVector(up, Math.sin(a));
+  return { target: pos.clone().addScaledVector(aim, dist), fov };
+}
 
 /** Vertical fov (deg) that fits all points around the view from `pos` to `target`. */
 export function fovToFit(pos: THREE.Vector3, target: THREE.Vector3, pts: readonly THREE.Vector3[], aspect: number, margin: number): number {
@@ -112,7 +182,9 @@ export class CameraRig {
         const look = new THREE.Vector3(55, RAIL_Y - 5, 10);
         const mid = com.clone().addScaledVector(axis, (BOOSTER_LENGTH / 2 - COM_ABOVE_BASE) * 0.5);
         const near = 1 - THREE.MathUtils.clamp((com.distanceTo(look) - 60) / 400, 0, 1);
-        wantTarget.copy(look).lerp(mid, 0.25 * near);
+        // Portrait screens are narrow: lean further toward the booster so a divert toward the
+        // camera side does not push it past the side edge.
+        wantTarget.copy(look).lerp(mid, (c.aspect < 1 ? 0.45 : 0.25) * near);
         // Pitch between "horizon just inside the top edge" and a shallow 12 deg down.
         const d = wantTarget.clone().sub(wantPos);
         const horiz = Math.max(1, Math.hypot(d.x, d.z));
@@ -130,10 +202,11 @@ export class CameraRig {
         if (com.y < 420) {
           pts.push(new THREE.Vector3(TOWER_X, TOWER_HEIGHT + 12, 0), new THREE.Vector3(TOWER_X, 0, 0));
         }
-        wantTarget.set(0, 0, 0);
-        for (const p of pts) wantTarget.add(p);
-        wantTarget.multiplyScalar(1 / pts.length);
-        fov = THREE.MathUtils.clamp(fovToFit(wantPos, wantTarget, pts, c.aspect, 1.3), 0.8, 30) * (1 + 0.12 * this.pull);
+        // Long lens: the subject sits in the band below the HUD strip.
+        // Portrait phones are narrow: allow a wider lens so tower and booster both fit.
+        const f = frameInSafe(wantPos, pts, c.aspect, safeTop(c.aspect), SAFE_BOTTOM, 1.2, 0.8, c.aspect < 1 ? 48 : 30);
+        wantTarget.copy(f.target);
+        fov = f.fov * (1 + 0.12 * this.pull);
         targetTau = 0.45;
         fovTau = 0.8;
         shakeK = 0.25;
@@ -141,9 +214,13 @@ export class CameraRig {
       }
       case 'chase': {
         const a = 0.75 + 0.035 * s.t;
-        wantPos.set(com.x + Math.cos(a) * 150, com.y + 14, com.z - Math.sin(a) * 150);
+        // A little farther out on portrait phones, so the whole hull clears the taller HUD.
+        const R = c.aspect < 1 ? 185 : 150;
+        wantPos.set(com.x + Math.cos(a) * R, com.y + 14, com.z - Math.sin(a) * R);
         wantPos.y = Math.max(wantPos.y, terrainHeight(wantPos.x, wantPos.z) + 12);
-        wantTarget.copy(com).addScaledVector(axis, -6);
+        // Fixed 44 deg drone lens, re-aimed so the hull and engine end clear the HUD.
+        const f = frameInSafe(wantPos, [top, base], c.aspect, safeTop(c.aspect), SAFE_BOTTOM, 1, 44, 44);
+        wantTarget.copy(f.target);
         fov = 44;
         posTau = 0.9;
         targetTau = 0.12;
@@ -162,17 +239,19 @@ export class CameraRig {
       }
       case 'wide': {
         if (s.hero) {
-          // Low and close: the booster in the arms fills the frame, sunset sky behind.
+          // Low three-quarter view: the tower top and the booster held in both arms fill
+          // the frame, the sunset rims them. No HUD in the menu, so only a small top margin.
           wantPos.set(HERO_CAM.x, HERO_CAM.y, HERO_CAM.z);
-          const pts = [top, new THREE.Vector3(TOWER_X, TOWER_HEIGHT + 10, 0), new THREE.Vector3(TOWER_X, 18, 0), base];
-          wantTarget.set(TOWER_X * 0.4, (top.y + 18) / 2, 0);
-          fov = THREE.MathUtils.clamp(fovToFit(wantPos, wantTarget, pts, c.aspect, 1.12), 8, 60);
+          const pts = [top, new THREE.Vector3(TOWER_X, TOWER_HEIGHT + 17, 0), new THREE.Vector3(TOWER_X, 40, 0), base];
+          const f = frameInSafe(wantPos, pts, c.aspect, 0.05, 0.04, 1.08, 8, 60);
+          wantTarget.copy(f.target);
+          fov = f.fov;
           // Aim left of the subject so it sits right of centre, clear of the left rail.
           if (c.aspect > 1) {
             const fwd = wantTarget.clone().sub(wantPos).normalize();
             const right = new THREE.Vector3().crossVectors(fwd, c.up).normalize();
             const halfW = Math.tan(((fov / 2) * Math.PI) / 180) * wantPos.distanceTo(wantTarget) * c.aspect;
-            wantTarget.addScaledVector(right, -0.22 * halfW);
+            wantTarget.addScaledVector(right, -0.26 * halfW);
           }
           targetTau = 0.6;
           fovTau = 0.9;
@@ -180,12 +259,11 @@ export class CameraRig {
         }
         wantPos.set(WIDE_CAM.x, WIDE_CAM.y, WIDE_CAM.z);
         const pts = [top, plumeEnd, new THREE.Vector3(TOWER_X, TOWER_HEIGHT + 8, 0), new THREE.Vector3(TOWER_X, 0, 0)];
-        wantTarget.set(0, 0, 0);
-        for (const p of pts) wantTarget.add(p);
-        wantTarget.multiplyScalar(1 / pts.length);
-        // Keep some foreground (dunes, crowd) in the bottom of the frame.
-        wantTarget.y -= 12;
-        fov = THREE.MathUtils.clamp(fovToFit(wantPos, wantTarget, pts, c.aspect, 1.35), 2.5, 38);
+        // Keep the whole story (booster, plume, tower) below the HUD, with some foreground
+        // (dunes, crowd) at the bottom of the frame.
+        const f = frameInSafe(wantPos, pts, c.aspect, safeTop(c.aspect), SAFE_BOTTOM + 0.06, 1.12, 2.5, c.aspect < 1 ? 64 : 38);
+        wantTarget.copy(f.target);
+        fov = f.fov;
         targetTau = 0.6;
         fovTau = 0.9;
         shakeK = 0.1;
@@ -207,16 +285,28 @@ export class CameraRig {
       c.fov = snap ? fov : c.fov + (fov - c.fov) * expK(dt, fovTau);
       c.updateProjectionMatrix();
     }
-    // Angular shake, scaled by thrust and distance (never with reduced motion).
     const aim = this.target.clone();
-    if (!s.reducedMotion && shakeK > 0 && s.thrustFrac > 0.02) {
-      const d = this.pos.distanceTo(com);
-      const ang = shakeK * s.thrustFrac * 0.012 / (1 + d / 120);
+    let roll = 0;
+    if (!s.reducedMotion) {
       const r = this.pos.distanceTo(aim);
-      aim.x += Math.sin(s.t * 31.7) * Math.sin(s.t * 4.3) * ang * r;
-      aim.y += Math.sin(s.t * 27.3 + 1.1) * Math.sin(s.t * 3.1 + 2) * ang * r;
+      const fovRad = (c.fov * Math.PI) / 180;
+      // Micro-shake: angular, scaled by thrust and by how close the lens is to the plume.
+      if (shakeK > 0 && s.thrustFrac > 0.02) {
+        const d = this.pos.distanceTo(com);
+        const ang = (shakeK * s.thrustFrac * 0.012) / (1 + d / 120) + 0.0025 * fovRad * s.thrustFrac;
+        aim.x += (Math.sin(s.t * 31.7) * Math.sin(s.t * 4.3) + 0.35 * Math.sin(s.t * 71.3)) * ang * r;
+        aim.y += (Math.sin(s.t * 27.3 + 1.1) * Math.sin(s.t * 3.1 + 2) + 0.35 * Math.sin(s.t * 63.1 + 0.4)) * ang * r;
+        roll = Math.sin(s.t * 23.9 + 0.7) * ang * 0.6;
+      }
+      // Settle bounce: the frame dips with the heavy thud on the rails, then rings out.
+      const ti = s.impact;
+      if (ti !== null && ti !== undefined && ti >= 0 && ti < 1.6) {
+        const k = 0.03 * fovRad * Math.exp(-ti / 0.35) * Math.sin(2 * Math.PI * 2.2 * ti);
+        aim.y -= k * r;
+      }
     }
     c.lookAt(aim);
+    if (roll !== 0) c.rotateZ(roll);
   }
 
   /** A cut to this rig: restart the focus pull. */

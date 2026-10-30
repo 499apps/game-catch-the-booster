@@ -50,6 +50,8 @@ export class View {
   private composer: EffectComposer | null = null;
   private renderPass: RenderPass | null = null;
   private finish: FinishPass | null = null;
+  private bloom: UnrealBloomPass | null = null;
+  private bloomBase = 0.6;
   private profile: QualityProfile;
   private width = 1;
   private height = 1;
@@ -108,12 +110,15 @@ export class View {
     this.composer = null;
     this.renderPass = null;
     this.finish = null;
+    this.bloom = null;
     if (p.bloom !== 'off') {
       const composer = new EffectComposer(this.renderer);
       this.renderPass = new RenderPass(this.world.scene, this.rigs.wide.camera);
       composer.addPass(this.renderPass);
       const res = new THREE.Vector2(this.width, this.height);
       const bloom = p.bloom === 'half' ? new HalfBloomPass(res, 0.5, 0.55, 0.92) : new UnrealBloomPass(res, 0.62, 0.6, 0.9);
+      this.bloom = bloom;
+      this.bloomBase = bloom.strength;
       composer.addPass(bloom);
       composer.addPass(new OutputPass());
       this.finish = new FinishPass();
@@ -161,6 +166,9 @@ export class View {
     const aspect = this.width / this.height;
     if (Math.abs(rig.camera.aspect - aspect) > 1e-4) rig.setAspect(aspect);
     rig.update(shot, dt, snap);
+    // A plume close to the lens: less bloom and streak, so the core and diamonds still read.
+    const near = this.world.tuneForCamera(rig.camera.position);
+    if (this.bloom) this.bloom.strength = this.bloomBase * (1 - 0.6 * near);
 
     // Exposure pump: the ignition flash blows out, then the "camera" adapts to the bright plume.
     const w = this.world;
@@ -180,7 +188,7 @@ export class View {
         time: t,
         aspect,
         shimmer: cam === 'beach' ? 1 : cam === 'wide' ? 0.5 : 0,
-        flare: fl.k,
+        flare: fl.k * (1 - 0.75 * near),
         flareX: fl.x,
         flareY: fl.y,
         grain: frame.reducedMotion ? 0.015 : 0.03,
@@ -221,6 +229,7 @@ export class View {
       const rig = this.rigs[id];
       if (Math.abs(rig.camera.aspect - w / h) > 1e-4) rig.setAspect(w / h);
       rig.update(shot, dt, snap);
+      this.world.tuneForCamera(rig.camera.position);
       r.setViewport(x, y, w, h);
       r.setScissor(x, y, w, h);
       r.render(this.world.scene, rig.camera);
@@ -240,6 +249,7 @@ export class View {
     const rig = this.rigs[id];
     if (Math.abs(rig.camera.aspect - w / h) > 1e-4) rig.setAspect(w / h);
     rig.update(shot, dt, snap);
+    this.world.tuneForCamera(rig.camera.position);
     r.setRenderTarget(null);
     r.setViewport(x, y, w, h);
     r.setScissor(x, y, w, h);

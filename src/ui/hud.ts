@@ -307,6 +307,23 @@ export class Hud {
     this.captionUntil = 0;
   }
 
+  /** A short bright flash on the CATCH button when the arms start to close. */
+  flashCatch(): void {
+    const b = this.catchBtn;
+    if (typeof b.animate !== 'function') return;
+    const reduced = this.root.closest('.reduced') !== null;
+    const glow = 'drop-shadow(0 0 30px rgba(255, 255, 255, 0.95)) brightness(1.7)';
+    const rest = 'drop-shadow(0 0 0 rgba(95, 255, 208, 0))';
+    b.animate(
+      [
+        { filter: rest, transform: 'scale(1)' },
+        { filter: glow, transform: reduced ? 'scale(1)' : 'scale(1.12)', offset: 0.22 },
+        { filter: rest, transform: 'scale(1)' },
+      ],
+      { duration: reduced ? 380 : 650, easing: 'ease-out' },
+    );
+  }
+
   update(d: HudData, now: number): void {
     if (this.captionUntil && now > this.captionUntil) this.clearCaption();
     if (d.tau !== null) setText(this.tPlus, clock(d.tau, '+'));
@@ -397,7 +414,8 @@ export class Hud {
       const hold = d.armsClosing ? 1 : Math.max(0, Math.min(1, d.catchHold));
       this.ringHold.setAttribute('stroke-dashoffset', (hc * (1 - hold)).toFixed(1));
       setText(this.catchLabel, d.armsClosing ? 'CLOSING' : 'CATCH');
-      setText(this.catchSub, d.armsClosing ? '✓ arms moving' : d.catchTgo !== null ? `${fmt(Math.max(0, d.catchTgo), 1)} s` : 'hold');
+      // Short text: it must fit inside the ring on the smallest phone button.
+      setText(this.catchSub, d.armsClosing ? '✓ arms' : d.catchTgo !== null ? `${fmt(Math.max(0, d.catchTgo), 1)} s` : 'hold');
       this.catchBtn.classList.toggle('closing', d.armsClosing);
       this.catchBtn.classList.toggle('urgent', !d.armsClosing && d.catchTgo !== null && d.catchTgo < 4.5);
     }

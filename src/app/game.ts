@@ -59,6 +59,9 @@ interface Run {
   eventIndex: number;
   doneAtReal: number | null; // real seconds (scaled by timescale) when the sim finished
   contactT: number | null;
+  /** Play time (realTime) of the pin contact (camera settle bounce) and of the CATCH press. */
+  contactReal: number | null;
+  catchReal: number | null;
   splashFrom: Vec3 | null;
   score: ScoreBreakdown | null;
   debriefShown: boolean;
@@ -486,6 +489,8 @@ export class Game {
       eventIndex: 0,
       doneAtReal: null,
       contactT: null,
+      contactReal: null,
+      catchReal: null,
       splashFrom: null,
       score: null,
       debriefShown: false,
@@ -626,8 +631,10 @@ export class Game {
       if (!e) continue;
       if (e.type === 'contact') {
         r.contactT = w.t;
+        r.contactReal = this.realTime;
         this.devices.thud();
       }
+      if (e.type === 'armsCloseStart') r.catchReal = this.realTime;
       this.onEvent(e, { tier: r.tier, pos: w.pos, coach: r.tier === 'cadet' && !r.autopilot });
     }
   }
@@ -677,6 +684,7 @@ export class Game {
         break;
       case 'armsCloseStart':
         this.callout('Arms closing.');
+        this.hud.flashCatch();
         this.audio.play('hiss', this.delayFrom(tower, c.pos));
         break;
       case 'armsClosed':
@@ -762,6 +770,9 @@ export class Game {
       countSeconds: this.hooks.still || this.reducedMotion ? 0 : COUNT_UP_SECONDS / this.hooks.timescale,
     };
     this.lastDebrief = d;
+    // The debrief owns the screen: no telemetry strip, sticks, captions or camera tag.
+    this.hud.setVisible(false);
+    this.hud.clearCaption();
     this.menu.showDebrief(d);
     this.audio.setMusic(0, false);
   }
@@ -803,8 +814,11 @@ export class Game {
     if (!this.replay) return;
     this.exitReplayState();
     const d = this.lastDebrief;
-    if (d) this.menu.showDebrief({ ...d, isReplay: true, newBest: false, countSeconds: 0 });
-    else this.toMainMenu();
+    if (d) {
+      this.hud.setVisible(false);
+      this.hud.clearCaption();
+      this.menu.showDebrief({ ...d, isReplay: true, newBest: false, countSeconds: 0 });
+    } else this.toMainMenu();
   }
 
   private seekReplay(frac: number): void {
@@ -906,6 +920,7 @@ export class Game {
     splash: FrameState['splash'],
     aids: FrameState['aids'],
     hero: boolean,
+    after: { impact: number | null; vent: number },
   ): { frame: FrameState; shot: ShotInput } {
     const thrustFrac = src.thrust / (ENGINE_COUNT * ENGINE_THRUST);
     const reduced = this.reducedMotion;
@@ -922,13 +937,23 @@ export class Game {
       aids,
       splash,
       reducedMotion: reduced,
+      vent: after.vent,
+      hero,
     };
-    const shot: ShotInput = { com: pos, axis: axisFromTilt(src.tilt), thrustFrac, t: renderT, reducedMotion: reduced, hero };
+    const shot: ShotInput = {
+      com: pos,
+      axis: axisFromTilt(src.tilt),
+      thrustFrac,
+      t: renderT,
+      reducedMotion: reduced,
+      hero,
+      impact: after.impact,
+    };
     return { frame, shot };
   }
 
   private noAids(ringRadius: number): FrameState['aids'] {
-    return { show: false, ghost: [], pinGhost: null, ringRadius };
+    return { show: false, ghost: [], pinGhost: null, ringRadius, flash: 0 };
   }
 
   /** The frame for the live run (or the menu backdrop). */
@@ -947,10 +972,16 @@ export class Game {
       const pin = pinPosition(w.pos, w.tilt);
       const tgo = Math.min(timeToContact(pin.y - RAIL_Y, w.vel.y), 8);
       const pinGhost = { x: pin.x + w.vel.x * tgo, y: RAIL_Y + 0.6, z: pin.z + w.vel.z * tgo };
-      aids = { show: true, ghost: ghostPath(w, 24), pinGhost, ringRadius: w.cfg.pinWindow };
+      // The target ring flashes when CATCH is pressed.
+      const pressed = r ? r.catchReal : null;
+      const flash = pressed !== null ? Math.max(0, 1 - (this.realTime - pressed) / 0.7) : 0;
+      aids = { show: true, ghost: ghostPath(w, 24), pinGhost, ringRadius: w.cfg.pinWindow, flash };
     }
     const hero = !active && this.camera === 'wide';
-    return this.makeFrame(srcFromWorld(w), t, pos, splash, aids, hero);
+    // Held in the arms: cold vapour vents gently from the booster (menu hero, catch, debrief).
+    const vent = w.phase === 'caught' || w.phase === 'settling' ? 1 : 0;
+    const impact = active && r && r.contactReal !== null && !this.hooks.still ? this.realTime - r.contactReal : null;
+    return this.makeFrame(srcFromWorld(w), t, pos, splash, aids, hero, { impact, vent });
   }
 
   /** The frame for the replay player at its clock time. */
@@ -965,7 +996,10 @@ export class Game {
       splash = p.splash;
     }
     const src = srcFromFrame(f);
-    const { frame, shot } = this.makeFrame(src, rp.clock.t, pos, splash, this.noAids(TIER_CONFIG[rp.tier].pinWindow), false);
+    const contact = tl.contactT;
+    const impact = contact !== null && rp.clock.t >= contact ? rp.clock.t - contact : null;
+    const vent = f.phase === 'caught' || f.phase === 'settling' ? 1 : 0;
+    const { frame, shot } = this.makeFrame(src, rp.clock.t, pos, splash, this.noAids(TIER_CONFIG[rp.tier].pinWindow), false, { impact, vent });
     return { frame, shot, f };
   }
 

@@ -471,13 +471,14 @@ export class Menu {
     table.append(el('tr', { class: 'total' }, [el('td', { text: 'Score' }), total]));
 
     const head: Element[] = [];
+    let medal: HTMLElement | null = null;
     if (s.medal !== 'none') {
-      head.push(
-        el('div', { class: `medal ${s.medal}`, 'data-testid': 'debrief-medal' }, [
-          el('span', { class: 'glyph', 'aria-hidden': 'true', text: MEDAL_GLYPH[s.medal] }),
-          el('span', { text: MEDAL_LABEL[s.medal] }),
-        ]),
-      );
+      // While the score counts up the medal waits small; it pops in when the total lands.
+      medal = el('div', { class: `medal ${s.medal}${d.countSeconds > 0 ? ' waiting' : ''}`, 'data-testid': 'debrief-medal' }, [
+        el('span', { class: 'glyph', 'aria-hidden': 'true', text: MEDAL_GLYPH[s.medal] }),
+        el('span', { text: MEDAL_LABEL[s.medal] }),
+      ]);
+      head.push(medal);
     }
     if (!d.caught) head.push(splashArt(d.goodCall));
     const graphs = el('canvas', { class: 'graphs', 'data-testid': 'debrief-graphs', role: 'img' });
@@ -503,14 +504,19 @@ export class Menu {
       // After layout, so the canvas has its CSS size.
       requestAnimationFrame(() => drawFlightGraphs(graphs, series, d.marks));
     }
-    this.countUp(counters, d.countSeconds);
+    this.countUp(counters, d.countSeconds, () => {
+      if (!medal) return;
+      medal.classList.remove('waiting');
+      if (d.countSeconds > 0) medal.classList.add('landed');
+    });
   }
 
-  /** Animated counters (ease-out); instant when `seconds` is 0. */
-  private countUp(items: { node: HTMLElement; value: number; prefix: string }[], seconds: number): void {
+  /** Animated counters (ease-out); instant when `seconds` is 0. `done` runs when they land. */
+  private countUp(items: { node: HTMLElement; value: number; prefix: string }[], seconds: number, done: () => void): void {
     const final = (): void => {
       for (const c of items) c.node.textContent = `${c.prefix}${c.value}`;
       this.countRaf = null;
+      done();
     };
     if (seconds <= 0) {
       final();

@@ -132,6 +132,8 @@ export function makeWaterMaterial(shoreX: number): THREE.ShaderMaterial {
       uShoreX: { value: shoreX },
       uFogDensity: { value: FOG_DENSITY },
       uSplash: { value: new THREE.Vector4(0, 0, 0, 0) },
+      // Plume downwash on the water: x, z, ring radius (m), strength 0..1.
+      uWash: { value: new THREE.Vector4(0, 0, 0, 0) },
       uDetail: { value: 1 },
     },
     vertexShader: /* glsl */ `
@@ -152,6 +154,7 @@ export function makeWaterMaterial(shoreX: number): THREE.ShaderMaterial {
       uniform float uShoreX;
       uniform float uFogDensity;
       uniform vec4 uSplash;
+      uniform vec4 uWash;
       uniform float uDetail;
       varying vec3 vWorld;
 
@@ -215,6 +218,16 @@ export function makeWaterMaterial(shoreX: number): THREE.ShaderMaterial {
           col = mix(col, vec3(0.75, 0.68, 0.62), clamp(foam, 0.0, 1.0) * 0.75);
         }
 
+        if (uWash.w > 0.0) {
+          // Downwash: a churned white disc under the plume and a spray ring racing outward.
+          vec2 dv = vWorld.xz - uWash.xy;
+          float wr = length(dv);
+          vec2 dn = dv / max(wr, 0.001); // direction, not angle: no seam
+          float rough = vnoise(vec3(dn * 2.5 + vec2(wr * 0.05 - uTime * 1.8), uTime * 0.7));
+          float ring = exp(-pow((wr - uWash.z * (0.82 + 0.3 * rough)) / (uWash.z * 0.18 + 2.0), 2.0));
+          float disc = (1.0 - smoothstep(0.0, uWash.z * 0.8, wr)) * (0.45 + 0.55 * rough);
+          col = mix(col, vec3(0.88, 0.86, 0.82), clamp((ring * 0.85 + disc * 0.6) * uWash.w, 0.0, 0.85));
+        }
         if (uSplash.w > 0.0) {
           float sr = length(vWorld.xz - uSplash.xy);
           float ring = exp(-pow((sr - uSplash.z) / 6.0, 2.0)) + 0.6 * (1.0 - smoothstep(0.0, uSplash.z, sr));
@@ -225,6 +238,77 @@ export function makeWaterMaterial(shoreX: number): THREE.ShaderMaterial {
         vec3 hz = skyColor(normalize(vec3(-V.x, 0.02, -V.z)), false);
         col = mix(col, hz, fog);
         gl_FragColor = vec4(col, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }
+    `,
+  });
+}
+
+/**
+ * Wet sand at the waterline: dark damp sand with a Fresnel mirror of the dusk sky, a sun
+ * glint, and two thin swash foam lines that run up and back. Fades out up the beach.
+ */
+export function makeWetSandMaterial(shoreX: number): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    fog: false,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -4,
+    uniforms: {
+      ...skyUniforms(),
+      uTime: { value: 0 },
+      uShoreX: { value: shoreX },
+      uFogDensity: { value: FOG_DENSITY },
+      uDetail: { value: 1 },
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vWorld;
+      void main() {
+        vec4 w = modelMatrix * vec4(position, 1.0);
+        vWorld = w.xyz;
+        gl_Position = projectionMatrix * viewMatrix * w;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      ${NOISE_GLSL}
+      ${SKY_GLSL}
+      uniform float uTime;
+      uniform float uShoreX;
+      uniform float uFogDensity;
+      uniform float uDetail;
+      varying vec3 vWorld;
+      void main() {
+        float d = uShoreX - vWorld.x; // metres up the beach from the waterline
+        vec3 toCam = cameraPosition - vWorld;
+        float dist = length(toCam);
+        vec3 V = toCam / dist;
+        float n = vnoise(vec3(vWorld.xz * vec2(0.09, 0.025), 0.0));
+        float n2 = uDetail > 0.0 ? vnoise(vec3(vWorld.xz * 0.7, 2.0)) : 0.5;
+        // Damp band: wide where the swash reaches far, narrow elsewhere.
+        float wet = 1.0 - smoothstep(3.0 + 3.0 * n, 10.0 + 5.0 * n, d);
+        vec3 N = normalize(vec3((n2 - 0.5) * 0.06, 1.0, (n - 0.5) * 0.05));
+        vec3 R = reflect(-V, N);
+        R.y = abs(R.y) + 0.01;
+        float fres = 0.03 + 0.97 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+        vec3 sand = mix(vec3(0.15, 0.11, 0.075), vec3(0.2, 0.15, 0.1), n2);
+        vec3 col = mix(sand, skyColor(normalize(R), false), clamp(fres * 0.9 + 0.08, 0.0, 1.0));
+        vec3 H = normalize(V + uSunDir);
+        col += vec3(1.0, 0.68, 0.38) * pow(max(dot(N, H), 0.0), 260.0) * 3.0;
+        // Swash: a foam edge that runs up and back, and a fainter older line above it.
+        float run = 1.6 + 1.3 * sin(uTime * 0.42 + vWorld.z * 0.0037 + n * 2.0);
+        float edge = exp(-pow((d - run - (n2 - 0.5) * 0.8) / 0.22, 2.0));
+        float older = exp(-pow((d - 4.2 - 1.6 * n) / 0.3, 2.0)) * 0.45;
+        float lace = 0.6 + 0.4 * n2;
+        col = mix(col, vec3(0.82, 0.78, 0.72), clamp((edge + older) * lace, 0.0, 0.85));
+        float a = clamp(max(wet, (edge + older) * lace), 0.0, 1.0) * 0.92;
+        float fog = 1.0 - exp(-pow(dist * uFogDensity, 2.0));
+        vec3 hz = skyColor(normalize(vec3(-V.x, 0.02, -V.z)), false);
+        col = mix(col, hz, fog);
+        gl_FragColor = vec4(col, a);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }

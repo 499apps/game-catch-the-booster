@@ -33,6 +33,7 @@ import {
   makeSkyMaterial,
   makeSteelTexture,
   makeWaterMaterial,
+  makeWetSandMaterial,
   plumeLathe,
 } from './materials';
 import type { QualityProfile } from './quality';
@@ -72,9 +73,14 @@ export interface FrameState {
   thrustFrac: number; // total thrust / (13 x full)
   armProgress: number;
   railCompression: number;
-  aids: { show: boolean; ghost: Vec3[]; pinGhost: Vec3 | null; ringRadius: number };
+  /** Cadet aids; `flash` 0..1 flashes the target ring when CATCH is pressed. */
+  aids: { show: boolean; ghost: Vec3[]; pinGhost: Vec3 | null; ringRadius: number; flash: number };
   splash: { active: boolean; progress: number; at: Vec3 } | null;
   reducedMotion: boolean;
+  /** 0..1: held in the arms. Cold vapour vents from the booster and the crowd cheers. */
+  vent: number;
+  /** Main-menu hero shot: a warmer, stronger rim from the low sun. */
+  hero: boolean;
 }
 
 // ---------------------------------------------------------------- geometry helpers
@@ -177,6 +183,14 @@ export class WorldScene {
   private readonly tmpC = new THREE.Color();
   private readonly one = new THREE.Vector3(1, 1, 1);
   private readonly finAngles = [0, 1, 2, 3].map((i) => Math.PI / 4 + (i * Math.PI) / 2);
+  private wetSand: THREE.ShaderMaterial | null = null;
+  private lampMat: THREE.MeshBasicMaterial | null = null;
+  private haloMat: THREE.PointsMaterial | null = null;
+  private crowdCalm: THREE.InstancedMesh | null = null;
+  private crowdCheer: THREE.InstancedMesh | null = null;
+  /** Plume intensities before the per-camera near-lens trim (see tuneForCamera). */
+  private envI = 0;
+  private coreI = 0;
 
   constructor() {
     const s = this.scene;
@@ -302,16 +316,18 @@ export class WorldScene {
       det.push(new THREE.CylinderGeometry(0.55, 0.55, 2.6, 14).rotateX(Math.PI / 2).translate(0, PIN_ABOVE_COM, sz * (R + 1.0)));
       det.push(new THREE.BoxGeometry(1.6, 2.2, 0.6).translate(0, PIN_ABOVE_COM + 0.2, sz * (R + 0.2)));
     }
-    // Chines and the cable raceway: low, rounded and close to the hull tone. Bright, sharp
-    // boxes here read as a stray light line down the hull from the tower-top camera.
+    // Chines and the cable raceway: low, flat, raised strips in the hull's own stainless
+    // tone (same metal, same roughness), so they read as relief, never as a dark line.
     const strakes: THREE.BufferGeometry[] = [];
     for (const a of [0.6, Math.PI + 0.6]) {
-      const g = new THREE.CylinderGeometry(0.22, 0.22, 54, 6, 1).scale(1, 1, 0.8).translate(R + 0.05, BASE_Y + 9 + 27, 0);
+      const g = new THREE.CylinderGeometry(0.3, 0.3, 54, 10, 1).scale(0.4, 1, 1).translate(R - 0.02, BASE_Y + 9 + 27, 0);
       strakes.push(g.rotateY(-a));
     }
-    strakes.push(new THREE.CylinderGeometry(0.28, 0.28, 58, 6, 1).scale(0.7, 1, 1.2).translate(R + 0.08, BASE_Y + 8 + 29, 0).rotateY(-2.2));
-    const strakeMat = new THREE.MeshStandardMaterial({ color: '#8e9196', metalness: 0.75, roughness: 0.62, envMapIntensity: 0.6 });
+    // Raceway: 0.9 m wide, about 0.12 m proud of the skin.
+    strakes.push(new THREE.CylinderGeometry(0.45, 0.45, 58, 12, 1).scale(0.3, 1, 1).translate(R - 0.02, BASE_Y + 8 + 29, 0).rotateY(-2.2));
+    const strakeMat = new THREE.MeshStandardMaterial({ color: '#c3c5c9', metalness: 1, roughness: 0.34, envMapIntensity: 1.05 });
     const strakeMesh = new THREE.Mesh(merge(strakes), strakeMat);
+    strakeMesh.receiveShadow = true;
     this.booster.add(strakeMesh);
     for (const a of this.finAngles) {
       det.push(new THREE.BoxGeometry(0.8, 1.6, 1.4).translate(R + 0.35, TOP_Y - 3.5, 0).rotateY(-a));
@@ -428,12 +444,17 @@ export class WorldScene {
     const nz = zAll.length;
     const pos = new Float32Array(nx * nz * 3);
     const col = new Float32Array(nx * nz * 3);
-    const wet = new THREE.Color('#6b5b45');
-    const sand = new THREE.Color('#c9b48e');
+    const wet = new THREE.Color('#5f513f');
+    const sand = new THREE.Color('#c4ad86');
+    const pale = new THREE.Color('#d9c8a4');
+    const duneSand = new THREE.Color('#a88f66');
+    const wrack = new THREE.Color('#7a6a52'); // dried seaweed line at the high-tide mark
     const grass = new THREE.Color('#5b6236');
+    const sage = new THREE.Color('#717548');
     const dry = new THREE.Color('#8f8558');
     const site = new THREE.Color('#9a9488');
     const c = new THREE.Color();
+    const sat = (v: number): number => Math.min(1, Math.max(0, v));
     for (let i = 0; i < nx; i++) {
       for (let j = 0; j < nz; j++) {
         const x = xs[i] ?? 0;
@@ -444,12 +465,19 @@ export class WorldScene {
         pos[o + 1] = h;
         pos[o + 2] = z;
         const d = WATERLINE_X - x;
-        c.copy(sand).lerp(wet, 1 - Math.min(1, Math.max(0, d / 9)));
+        // Dry sand: pale wind-blown patches, darker on the dune faces.
+        c.copy(sand).lerp(pale, fbm2(x / 90 + 4, z / 140) * 0.7);
+        c.lerp(duneSand, sat((h - 2.8) / 5) * 0.55);
+        // Wrack line: a thin, broken darker band about 16 m up the beach.
+        c.lerp(wrack, Math.exp(-Math.pow((d - 16 - 3 * fbm2(z / 60, 1)) / 1.4, 2)) * 0.45 * sat(fbm2(z / 25, 7) * 2 - 0.4));
+        c.lerp(wet, 1 - sat(d / 9));
         const gr = grassAmount(x, z);
-        c.lerp(fbm2(x / 30, z / 30) > 0.5 ? dry : grass, gr * 0.9);
+        const g = fbm2(x / 30, z / 30);
+        c.lerp(g > 0.55 ? dry : g > 0.42 ? sage : grass, gr * 0.9);
         const inSite = Math.abs(z) < 200 && x < 0 && x > -560 && d > 20;
         if (inSite) c.lerp(site, 0.55);
-        const n = 0.88 + 0.24 * fbm2(x / 6, z / 6);
+        // Fine grain times a low-frequency swell, so no area reads as a flat fill.
+        const n = (0.9 + 0.2 * fbm2(x / 6, z / 6)) * (0.84 + 0.32 * fbm2(x / 380 + 3, z / 520 - 2));
         col[o] = c.r * n;
         col[o + 1] = c.g * n;
         col[o + 2] = c.b * n;
@@ -482,6 +510,38 @@ export class WorldScene {
     const ground = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0 }));
     ground.receiveShadow = true;
     s.add(ground);
+
+    // Wet sand at the waterline: a thin glossy band over the ground that mirrors the dusk
+    // sky, with drifting swash foam lines. One draw call; follows the terrain height.
+    const cols = [-1.5, 0, 1.5, 3, 5, 7.5, 10, 13, 16];
+    const rows: number[] = [];
+    for (let z = -5300; z <= 5300; z += 12) rows.push(z);
+    const wpos = new Float32Array(cols.length * rows.length * 3);
+    rows.forEach((z, j) => {
+      cols.forEach((d, i) => {
+        const x = WATERLINE_X - d;
+        const o = (j * cols.length + i) * 3;
+        wpos[o] = x;
+        wpos[o + 1] = Math.max(terrainHeight(x, z), -0.4) + 0.05;
+        wpos[o + 2] = z;
+      });
+    });
+    const widx: number[] = [];
+    for (let j = 0; j < rows.length - 1; j++) {
+      for (let i = 0; i < cols.length - 1; i++) {
+        const a = j * cols.length + i;
+        const b = a + cols.length;
+        widx.push(a, b, a + 1, a + 1, b, b + 1);
+      }
+    }
+    const wg = new THREE.BufferGeometry();
+    wg.setAttribute('position', new THREE.BufferAttribute(wpos, 3));
+    wg.setIndex(widx);
+    this.wetSand = makeWetSandMaterial(WATERLINE_X);
+    const wetMesh = new THREE.Mesh(wg, this.wetSand);
+    wetMesh.frustumCulled = false;
+    wetMesh.renderOrder = 1;
+    s.add(wetMesh);
 
     const far = new THREE.Mesh(
       new THREE.PlaneGeometry(40000, 64000),
@@ -529,55 +589,121 @@ export class WorldScene {
     this.scene.add(mesh);
   }
 
-  /** Spectators: on the dunes in front of the wide cam and on the beach down the coast. */
+  /**
+   * Spectators in loose clusters with gaps: on the sand ahead of the wide cam and down the
+   * coast toward the beach cam. Clearly human shapes at 1:1 scale (adults ~1.7 m, kids,
+   * people sitting), in muted clothing lifted by the dusk sky, never a dark block of pegs.
+   * Four draw calls: calm standers, sitters, and the cheerers (arms down / arms up).
+   */
   private buildCrowd(): void {
-    const n = 300;
-    // A person-like silhouette (tapered body, shoulders, head), small and dark against
-    // the dusk glow. Sizes vary (adults, kids, people sitting on the sand).
-    const body = new THREE.CylinderGeometry(0.17, 0.12, 0.95, 5).translate(0, 0.48, 0);
-    const shoulders = new THREE.CylinderGeometry(0.2, 0.17, 0.22, 5).translate(0, 1.0, 0);
-    const head = new THREE.SphereGeometry(0.11, 6, 4).translate(0, 1.24, 0);
-    const geo = merge([body, shoulders, head]);
-    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, metalness: 0 }), n);
-    const tones = ['#1d2129', '#2a221f', '#30343d', '#3a2824', '#172024', '#3d372e', '#432a2a', '#223340', '#4a4436', '#2c2b3a'];
-    let s = 1;
+    const cyl = (r0: number, r1: number, h: number, a: THREE.Vector3, b: THREE.Vector3): THREE.BufferGeometry => {
+      const g = new THREE.CylinderGeometry(r1, r0, h, 6, 1);
+      const dir = b.clone().sub(a);
+      g.applyMatrix4(new THREE.Matrix4().compose(a.clone().add(b).multiplyScalar(0.5), new THREE.Quaternion().setFromUnitVectors(UP, dir.normalize()), this.one));
+      return g;
+    };
+    const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
+    // Standing adult at scale 1: ~1.7 m. Legs with a gap, a torso wider at the shoulders, a head.
+    const core = (): THREE.BufferGeometry[] => [
+      cyl(0.075, 0.065, 0.84, V(-0.1, 0, 0), V(-0.09, 0.84, 0)),
+      cyl(0.075, 0.065, 0.84, V(0.1, 0, 0), V(0.09, 0.84, 0)),
+      new THREE.CylinderGeometry(0.22, 0.15, 0.62, 7, 1).scale(1, 1, 0.62).translate(0, 1.15, 0),
+      new THREE.CylinderGeometry(0.05, 0.05, 0.1, 5, 1).translate(0, 1.5, 0),
+      new THREE.SphereGeometry(0.115, 8, 6).scale(1, 1.12, 1).translate(0, 1.6, 0),
+    ];
+    const armsDown = [cyl(0.05, 0.045, 0.62, V(-0.25, 1.4, 0), V(-0.29, 0.8, 0.02)), cyl(0.05, 0.045, 0.62, V(0.25, 1.4, 0), V(0.29, 0.8, 0.02))];
+    const armsUp = [cyl(0.05, 0.045, 0.62, V(-0.23, 1.42, 0), V(-0.42, 2.0, 0)), cyl(0.05, 0.045, 0.62, V(0.23, 1.42, 0), V(0.4, 2.02, 0))];
+    // Sitting on the sand: knees up, hands on the knees.
+    const sitting = merge([
+      new THREE.CylinderGeometry(0.21, 0.16, 0.58, 7, 1).scale(1, 1, 0.62).translate(0, 0.42, 0),
+      new THREE.SphereGeometry(0.115, 8, 6).scale(1, 1.12, 1).translate(0, 0.86, 0),
+      cyl(0.075, 0.07, 0.42, V(-0.1, 0.12, 0), V(-0.1, 0.38, 0.32)),
+      cyl(0.075, 0.07, 0.42, V(0.1, 0.12, 0), V(0.1, 0.38, 0.32)),
+      cyl(0.07, 0.06, 0.4, V(-0.1, 0.38, 0.32), V(-0.1, 0.05, 0.5)),
+      cyl(0.07, 0.06, 0.4, V(0.1, 0.38, 0.32), V(0.1, 0.05, 0.5)),
+      cyl(0.045, 0.04, 0.48, V(-0.22, 0.66, 0), V(-0.12, 0.4, 0.34)),
+      cyl(0.045, 0.04, 0.48, V(0.22, 0.66, 0), V(0.12, 0.4, 0.34)),
+    ]);
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.92,
+      metalness: 0,
+      // A little of the dusk sky on the shaded side, so backlit people never go pure black.
+      emissive: new THREE.Color().setRGB(0.05, 0.055, 0.075),
+    });
+    const tones = ['#4a5a70', '#7a4a3c', '#b8a789', '#3d5446', '#8c837a', '#5e4866', '#a2432e', '#d9d5cb', '#2f3b4f', '#6b6f3e', '#c58b4a', '#41657e'];
+
+    let s = 7;
     const rnd = (): number => {
       s = (s * 16807) % 2147483647;
       return s / 2147483647;
     };
-    const m = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const sc = new THREE.Vector3();
-    for (let i = 0; i < n; i++) {
-      let x: number;
-      let z: number;
-      if (i < 220) {
-        // On the dry sand ahead of the wide cam, in loose groups.
-        const group = Math.floor(rnd() * 9);
-        x = WATERLINE_X - 7 - rnd() * 45;
-        z = WIDE_CAM.z - 230 - group * 18 - rnd() * 10;
-      } else {
-        x = WATERLINE_X - 6 - rnd() * 24;
-        z = -1560 + rnd() * 70;
+    type Person = { x: number; z: number; h: number; w: number; yaw: number; tone: string; kind: 'stand' | 'sit' | 'cheer' };
+    const people: Person[] = [];
+    const cluster = (cx: number, cz: number, count: number, spread: number, faceZ: number): void => {
+      for (let k = 0; k < count; k++) {
+        const a = rnd() * Math.PI * 2;
+        const r = Math.sqrt(rnd()) * spread;
+        const roll = rnd();
+        const kid = rnd() < 0.22;
+        const kind: Person['kind'] = roll < 0.18 ? 'sit' : roll < 0.52 ? 'cheer' : 'stand';
+        people.push({
+          x: cx + Math.cos(a) * r,
+          z: cz + Math.sin(a) * r,
+          h: kid ? 0.6 + rnd() * 0.16 : 0.96 + rnd() * 0.14,
+          w: kid ? 0.8 : 0.9 + rnd() * 0.25,
+          // Facing the tower (roughly), each a little different.
+          yaw: Math.atan2(TOWER_X - cx, faceZ - cz) + (rnd() - 0.5) * 0.9,
+          tone: tones[Math.floor(rnd() * tones.length)] ?? '#6b6b6b',
+          kind,
+        });
       }
-      const kind = rnd();
-      // ~20% sitting, ~20% kids, the rest adults of varied height and build.
-      const h = kind < 0.2 ? 0.5 + rnd() * 0.1 : kind < 0.4 ? 0.7 + rnd() * 0.15 : 1.0 + rnd() * 0.3;
-      const wdt = 0.85 + rnd() * 0.4;
-      q.setFromAxisAngle(UP, rnd() * 6.28);
-      sc.set(wdt, h, wdt * (0.8 + rnd() * 0.3));
-      m.compose(new THREE.Vector3(x, terrainHeight(x, z) - 0.05, z), q, sc);
-      mesh.setMatrixAt(i, m);
-      const tone = tones[Math.floor(rnd() * tones.length)] ?? '#2a2a2a';
-      mesh.setColorAt(i, new THREE.Color(tone).multiplyScalar(0.75 + rnd() * 0.35));
+    };
+    // Ahead of the wide cam: 13 groups along the dry sand, with open beach between them.
+    for (let g = 0; g < 13; g++) {
+      const cz = WIDE_CAM.z - 240 - g * 15 - rnd() * 8;
+      const cx = WATERLINE_X - 10 - rnd() * 42;
+      cluster(cx, cz, 3 + Math.floor(rnd() * 9), 1.6 + rnd() * 2.6, 0);
     }
-    this.scene.add(mesh);
+    // Down the coast toward the beach cam: a few groups, inland of its long-lens line.
+    for (let g = 0; g < 7; g++) {
+      const cz = -1390 + g * 22 + rnd() * 10;
+      const cx = WATERLINE_X - 14 - rnd() * 40;
+      cluster(cx, cz, 2 + Math.floor(rnd() * 6), 1.4 + rnd() * 2, 0);
+    }
+
+    const make = (geo: THREE.BufferGeometry, list: Person[]): THREE.InstancedMesh | null => {
+      if (list.length === 0) return null;
+      const mesh = new THREE.InstancedMesh(geo, mat, list.length);
+      const m = new THREE.Matrix4();
+      const q = new THREE.Quaternion();
+      const sc = new THREE.Vector3();
+      const p = new THREE.Vector3();
+      const col = new THREE.Color();
+      list.forEach((o, i) => {
+        q.setFromAxisAngle(UP, o.yaw);
+        sc.set(o.w * o.h, o.h, o.w * o.h);
+        m.compose(p.set(o.x, terrainHeight(o.x, o.z) - 0.03, o.z), q, sc);
+        mesh.setMatrixAt(i, m);
+        mesh.setColorAt(i, col.set(o.tone).multiplyScalar(0.7 + ((i * 0.618) % 1) * 0.3));
+      });
+      this.scene.add(mesh);
+      return mesh;
+    };
+    make(merge([...core(), ...armsDown]), people.filter((o) => o.kind === 'stand'));
+    make(sitting, people.filter((o) => o.kind === 'sit'));
+    const cheer = people.filter((o) => o.kind === 'cheer');
+    this.crowdCalm = make(merge([...core(), ...armsDown]), cheer);
+    this.crowdCheer = make(merge([...core(), ...armsUp]), cheer);
+    if (this.crowdCheer) this.crowdCheer.visible = false;
   }
 
   private buildTower(): void {
     const s = this.scene;
     const steelMap = makeSteelTexture();
-    const steel = new THREE.MeshStandardMaterial({ color: '#6a6660', map: steelMap, metalness: 0.55, roughness: 0.62 });
+    // Weathered grey steel, not black: light enough that the low sun rims the edges and the
+    // sky shows in the grazing reflections.
+    const steel = new THREE.MeshStandardMaterial({ color: '#b2aca4', map: steelMap, metalness: 0.4, roughness: 0.58, envMapIntensity: 1.25 });
     const half = TOWER_W / 2;
     const stat: THREE.BufferGeometry[] = [];
     for (const [dx, dz] of [
@@ -633,6 +759,9 @@ export class WorldScene {
       [0, half, 0],
       [0, -half, 0],
     ];
+    // Depth: each bay and face a slightly different tone (paint, weathering), and the
+    // horizontal braces a touch lighter than the diagonals behind them.
+    const tone = new THREE.Color();
     for (let b = 0; b < bays; b++) {
       const y = b * bayH + bayH + 1;
       for (const [fx, fz, yaw] of faces) {
@@ -640,11 +769,14 @@ export class WorldScene {
         e.set(0, yaw, 0);
         q.setFromEuler(e);
         m.compose(p, q, one);
+        const k = 0.9 + 0.18 * frac(Math.sin(b * 12.9898 + fx * 3.1 + fz * 7.7) * 43758.5453);
+        braces.setColorAt(bi, tone.setScalar(k * 1.06));
         braces.setMatrixAt(bi++, m);
         for (const sgn of [-1, 1]) {
           e.set(0, yaw, sgn * tilt, 'YXZ');
           q.setFromEuler(e);
           m.compose(p.clone().setY(y - bayH / 2), q, one);
+          diags.setColorAt(di, tone.setScalar(k * (sgn > 0 ? 0.92 : 0.86)));
           diags.setMatrixAt(di++, m);
         }
       }
@@ -653,9 +785,12 @@ export class WorldScene {
     diags.castShadow = true;
     s.add(braces, diags);
 
-    // Aviation lights (red) at the top and mid height.
+    // Aviation warning lights (red) at the top, mid height and the mast tip. They blink
+    // (see update); a fixed-pixel-size halo keeps them visible on the long lenses.
     const lampGeo = new THREE.SphereGeometry(0.45, 8, 6);
-    const lamps = new THREE.InstancedMesh(lampGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(6, 0.5, 0.3), fog: false }), 9);
+    this.lampMat = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(6, 0.5, 0.3), fog: false });
+    const lamps = new THREE.InstancedMesh(lampGeo, this.lampMat, 9);
+    const lampPos: number[] = [];
     let li = 0;
     for (const y of [TOWER_HEIGHT + 1.2, TOWER_HEIGHT * 0.5]) {
       for (const [dx, dz] of [
@@ -666,14 +801,32 @@ export class WorldScene {
       ] as const) {
         m.makeTranslation(TOWER_X + dx * (half + 0.8), y, dz * (half + 0.8));
         lamps.setMatrixAt(li++, m);
+        lampPos.push(TOWER_X + dx * (half + 0.8), y, dz * (half + 0.8));
       }
     }
     m.makeTranslation(TOWER_X + 2, TOWER_HEIGHT + 16.3, 3);
     lamps.setMatrixAt(li++, m);
+    lampPos.push(TOWER_X + 2, TOWER_HEIGHT + 16.3, 3);
     s.add(lamps);
+    const haloGeo = new THREE.BufferGeometry();
+    haloGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lampPos), 3));
+    this.haloMat = new THREE.PointsMaterial({
+      size: 10,
+      sizeAttenuation: false,
+      map: makeGlowTexture(),
+      color: new THREE.Color().setRGB(1, 0.16, 0.08),
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      fog: false,
+    });
+    const halos = new THREE.Points(haloGeo, this.haloMat);
+    halos.frustumCulled = false;
+    halos.renderOrder = 6;
+    s.add(halos);
 
     // Arms: pivot at the carriage, beam along +x when closed; truss, rail, bumper, hydraulics.
-    const armMat = new THREE.MeshStandardMaterial({ color: '#5d5a55', map: steelMap, metalness: 0.6, roughness: 0.55 });
+    const armMat = new THREE.MeshStandardMaterial({ color: '#a39d95', map: steelMap, metalness: 0.45, roughness: 0.55, envMapIntensity: 1.2 });
     const railMat = new THREE.MeshStandardMaterial({ color: '#c9a640', metalness: 0.4, roughness: 0.5 });
     const bumperMat = new THREE.MeshStandardMaterial({ color: '#e3ddcf', roughness: 0.85 });
     const lampMat = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(4, 3.6, 3), fog: false });
@@ -764,11 +917,26 @@ export class WorldScene {
     // Low: stratus only and no sea micro-detail (keeps software GL and old phones fast).
     this.sky.uniforms['uClouds']!.value = q.tier === 'low' ? 0.5 : 1;
     this.water.uniforms['uDetail']!.value = q.tier === 'low' ? 0 : 1;
+    if (this.wetSand) this.wetSand.uniforms['uDetail']!.value = q.tier === 'low' ? 0 : 1;
   }
 
   /** World position of the engine plane centre (for the lens flare). */
   enginePoint(out: THREE.Vector3): THREE.Vector3 {
     return this.booster.localToWorld(out.set(0, BASE_Y - 2, 0));
+  }
+
+  /**
+   * Trims the plume for a lens that sits close to it (the tower top): the nozzle glow
+   * sprite and the shells would otherwise fill the frame with a white bloom blob. Keeps
+   * the hot core and the diamonds. Returns 0 (far) .. 1 (very near) for the bloom/flare.
+   */
+  tuneForCamera(camPos: THREE.Vector3): number {
+    const d = this.enginePoint(this.tmpV).distanceTo(camPos);
+    const near = 1 - THREE.MathUtils.smoothstep(d, 35, 230);
+    (this.nozzleGlow.material as THREE.SpriteMaterial).opacity = 1 - 0.8 * near;
+    this.envMat.uniforms['uIntensity']!.value = this.envI * (1 - 0.45 * near);
+    this.coreMat.uniforms['uIntensity']!.value = this.coreI * (1 - 0.2 * near);
+    return near;
   }
 
   // ---------------------------------------------------------------- per frame
@@ -864,20 +1032,44 @@ export class WorldScene {
       cu['uCells']!.value = 4;
       cu['uIntensity']!.value = 0.8 + 0.4 * heat;
     } else {
+      // Three engines: a tight hot pillar, white-gold core falling off to orange, with
+      // clear shock diamonds.
       this.envelope.scale.set(3.6 * spread, 62 + 10 * heat, 3.6 * spread);
-      eu['uIntensity']!.value = (0.45 + 0.3 * heat) * (1 + this.flash);
+      eu['uIntensity']!.value = (0.42 + 0.28 * heat) * (1 + this.flash);
       eu['uChaos']!.value = 0.25;
-      (eu['uCore']!.value as THREE.Color).setRGB(1.9, 1.6, 1.2);
-      (eu['uEdge']!.value as THREE.Color).setRGB(1.4, 0.68, 0.3);
-      cu['uDiamonds']!.value = 1;
+      (eu['uCore']!.value as THREE.Color).setRGB(1.8, 1.35, 0.85);
+      (eu['uEdge']!.value as THREE.Color).setRGB(1.35, 0.55, 0.2);
+      cu['uDiamonds']!.value = 1.35;
       cu['uCells']!.value = 6.5 + 0.4 * Math.sin(f.t * 5.3 * tm);
-      cu['uIntensity']!.value = 1.0 + 0.4 * heat;
+      cu['uIntensity']!.value = 0.95 + 0.35 * heat;
     }
+    this.envI = eu['uIntensity']!.value as number;
+    this.coreI = cu['uIntensity']!.value as number;
     this.nozzleGlow.scale.setScalar((many ? 34 : 20) * (1 + this.flash * 1.6));
     this.plumeLevel = anyLit ? Math.min(1, 0.45 + heat * 0.8 + this.flash) : 0;
     // Candela: ~8 lx on the hull/tower at 20 m, ~0.3 lx on the ground from 100 m up.
     this.plumeLight.intensity = anyLit ? 2500 * (0.35 + heat) * (1 + this.flash * 2) : 0;
-    this.hullMat.emissiveIntensity = anyLit ? (0.5 + 1.1 * heat) * (1 + this.flash) : 0;
+    // The plume's warm light climbs the lower hull (stronger close to the ground bounce).
+    const bounce = 1 + 0.6 * Math.max(0, 1 - alt / 160);
+    this.hullMat.emissiveIntensity = anyLit ? (0.5 + 1.1 * heat) * (1 + this.flash) * bounce : 0;
+
+    // Hero (menu): the low sun a little warmer and stronger, for a clear rim on the steel.
+    this.sun.intensity = f.hero ? 4.2 : 3.4;
+    this.sun.color.setRGB(1.0, f.hero ? 0.62 : 0.68, f.hero ? 0.36 : 0.42);
+
+    // Aviation lights: ~40 flashes a minute; dimmer and slower with reduced motion.
+    const ph = frac(f.t * (f.reducedMotion ? 0.4 : 0.67));
+    const blink = f.reducedMotion ? 0.55 + 0.45 * Math.cos(ph * Math.PI * 2) : ph < 0.42 ? 1 : 0.06;
+    if (this.lampMat) this.lampMat.color.setRGB(6 * blink + 0.2, 0.5 * blink + 0.03, 0.3 * blink + 0.02);
+    if (this.haloMat) this.haloMat.opacity = 0.1 + 0.9 * blink;
+
+    // The crowd raises its arms once the booster is held.
+    if (this.crowdCalm && this.crowdCheer) {
+      const cheer = f.vent > 0;
+      this.crowdCalm.visible = !cheer;
+      this.crowdCheer.visible = cheer;
+    }
+    if (this.wetSand) this.wetSand.uniforms['uTime']!.value = f.t;
 
     // Grid fin twitch (high frequency, tiny).
     for (let i = 0; i < 4; i++) {
@@ -934,7 +1126,8 @@ export class WorldScene {
     const ix = bx - axis.x * k;
     const iz = bz - axis.z * k;
     const ground = Math.max(0, terrainHeight(ix, iz));
-    const reach = lit > 3 ? 150 : 100;
+    // How high the plume still stirs the surface (a tight 3-engine pillar reaches far down).
+    const reach = lit > 3 ? 150 : 160;
     const target = lit > 0 ? Math.max(0, Math.min(1, 1 - (by - ground) / reach)) : 0;
     if (fresh) {
       this.wash = target;
@@ -992,12 +1185,24 @@ export class WorldScene {
       const big = lit > 3 || lit === 0 ? 1 : 0.75;
       emit(count, this.washAt.x, this.washAt.y, this.washAt.z, 190 * big, 46, 16, 0.55 * Math.min(1, this.wash * 1.3), tint, 0.16, 0);
     }
+    // The downwash ring on the water under the plume (drawn by the sea shader).
+    const washV = this.water.uniforms['uWash']!.value as THREE.Vector4;
+    const ww = this.wash * this.washWater;
+    if (ww > 0.01) washV.set(this.washAt.x, this.washAt.z, 16 + 46 * this.wash, Math.min(1, ww * 1.2));
+    else washV.set(0, 0, 0, 0);
     const sp = f.splash;
     if (sp?.active) {
       const k = Math.min(1, sp.progress);
       const s = Math.max(0, Math.sin(Math.PI * Math.min(1, k * 1.3)));
       const count = Math.floor(this.particleCount * 0.6 * motion);
       emit(count, sp.at.x, 0, sp.at.z, 70, 30, 14, 0.5 * s, [0.95, 0.97, 1.0], 0.22, 5000);
+    }
+    // Held in the arms: cold vapour vents near the top and sinks from the engine bay.
+    if (f.vent > 0 && !sp?.active) {
+      const vc = Math.floor(Math.min(90, this.particleCount * 0.12) * (f.reducedMotion ? 0.5 : 1));
+      const topY = TOP_Y - 1.5;
+      emit(vc, f.pos.x + axis.x * topY, f.pos.y + axis.y * topY - 1.5, f.pos.z + axis.z * topY, 9, 16, 2.6, 0.34 * f.vent, [0.97, 0.98, 1.0], 0.2, 7000);
+      emit(Math.floor(vc * 0.7), bx, by - 3, bz, 7, -12, 3.2, 0.28 * f.vent, [0.95, 0.96, 0.98], 0.14, 8000);
     }
     this.pGeo.instanceCount = n;
     if (n > 0) {
@@ -1013,9 +1218,13 @@ export class WorldScene {
     this.ghostLine.visible = a.show && a.ghost.length > 1;
     this.pinGhost.visible = a.show && !!a.pinGhost;
     if (!a.show) return;
-    this.ring.scale.setScalar(a.ringRadius / 3);
+    // CATCH pressed: the ring flashes white-hot and swells, then settles back.
+    const fl = Math.min(1, Math.max(0, a.flash));
+    this.ring.scale.setScalar((a.ringRadius / 3) * (1 + (f.reducedMotion ? 0.08 : 0.3) * fl));
     const pulse = f.reducedMotion ? 0.8 : 0.65 + 0.3 * Math.sin(f.t * 4);
-    (this.ring.material as THREE.MeshBasicMaterial).opacity = pulse;
+    const rm = this.ring.material as THREE.MeshBasicMaterial;
+    rm.opacity = Math.min(1, pulse + fl);
+    rm.color.set('#5fffd0').lerp(this.tmpC.setRGB(2.4, 2.4, 2.4), fl * (f.reducedMotion ? 0.4 : 1));
     const attr = this.ghostLine.geometry.getAttribute('position') as THREE.BufferAttribute;
     const n = Math.min(64, a.ghost.length);
     for (let i = 0; i < n; i++) {
