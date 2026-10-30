@@ -9,6 +9,12 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = join(root, 'dist');
 const BASE = '/games/catch-the-booster/';
 
+// The games hub assembly (VITE_ASSEMBLED=1) ships one worker at /games/sw.js that covers this game.
+if (process.env.VITE_ASSEMBLED === '1') {
+  console.log('[build-sw] assembled build: no sw.js (the hub worker covers this game)');
+  process.exit(0);
+}
+
 function walk(dir) {
   const out = [];
   for (const name of readdirSync(dir)) {
