@@ -208,6 +208,29 @@ I could not run any tools. Nothing in c7 is verified.
 - The clock offset between the HUD (T+ from ignition) and the replay (from the run start). I left it: it is the pre-roll by design.
 - Regenerate the visual baselines only after the e2e run passes. The beach divert framing, the steer cue position, the hull tone and the phone layout all change them.
 
+## c8: gate-4 fixes
+
+I could not run any tools. Nothing in c8 is verified.
+
+| # | Finding | Fix | Files |
+| --- | --- | --- | --- |
+| 1 | Ring off screen in the steer | The beach divert framing is now booster top, plume end and (0, RAIL_Y - 8, 0), the point just under the catch ring, in place of the tower top. The practice uses the same lens. Early in the divert (CoM 260 m) the booster is about 22% of the frame (it was about 13% with the tower base), and it grows as it comes down. New tests at 16:9 and 393x852: from +13 s to +20 s of a Cadet flight, the ring centre projects inside `safeBand` (clear of the HUD bands). | `src/render/cameras.ts`, `tests/unit/render.test.ts` |
+| 2 | Tutorial card hides the booster | Steer step on touch: the lesson text ("Drag the pad the way the arrow points · 1.0 m") is in `#steer-cue`. The card shrinks to one "Skip tutorial" pill in the top-right corner. Steer step on desktop: a 300 px card docked top right. The strip readouts are dimmed in the tutorial, but the steer banner is not. | `src/app/game.ts`, `src/ui/hud.ts`, `src/ui/styles.css` |
+| 5 | Tall Cadet strip on phones | Under 400 px, Cadet uses row 2 `'tol tol tol tol board'`. PIN and TILT do not wrap, and the GO chip takes the clock column, so the strip has 2 rows. | `src/ui/styles.css` |
+| 6 | Camera tag on phones | Touch shows one short word: BEACH, TOWER, DRONE, ONBOARD, WIDE, PRACTICE, "X · REPLAY", SPLIT. No "· auto" and no ellipsis. | `src/app/game.ts`, `src/ui/styles.css` |
+| 8 | Replay polish | On phones in split view, the tag is in `#replay-bar` ("SPLIT · SYNCED") and the camera tag is hidden. The replay time reads T-/T+ from ignition (`formatSigned`), the same clock as the HUD. | `src/ui/replaybar.ts`, `src/app/game.ts`, `src/ui/styles.css` |
+| 9 | Proof stills | New hook `stick=away`. The still mode now runs the "Other way" timer. New stills on desktop and iPhone: `cadet-wrongway` (+14 s, 1 s against the arrow) and `pilot-flight` (Pilot +10 s, which shows the PROP chip). | `src/app/params.ts`, `src/app/game.ts`, `scripts/capture.mjs` |
+| nice | Plumes | The 3-engine core is 2× longer (88 + 28·throttle m). The shell is 110 + 20·heat m long, with a warmer pink-orange core and edge. The 13-engine core is more orange. | `src/render/scene.ts` |
+
+**Not done:**
+
+- The softer stratus streaks in the sky. I did not change the sky shader.
+- The land colour variation and the fin texture (findings 7 and 10).
+- The playtest (finding 3).
+- A catch-frame luminance test: it needs a GPU render, so it cannot run as a unit test.
+
+**Baselines:** the beach divert framing, the tutorial layout, the plumes and the Cadet strip all change the visual baselines. Regenerate them only after the e2e run passes.
+
 ## Commands for the operator (in order)
 
 1. `pnpm typecheck`

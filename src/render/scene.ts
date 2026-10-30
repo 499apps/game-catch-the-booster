@@ -1039,7 +1039,8 @@ export class WorldScene {
       const [x, z] = this.layout[i] ?? [0, 0];
       const thr = e ? e.throttle : 0;
       this.glows.setColorAt(i, level > 0 ? this.tmpC.setRGB(1 + 5 * level, 0.6 + 2.4 * level, 0.25 + 0.8 * level) : this.tmpC.setRGB(0.03, 0.03, 0.03));
-      const len = lit > 3 ? 20 + 8 * thr : 44 + 14 * thr;
+      // 3 engines: a long pillar (about a booster length), as in the footage.
+      const len = lit > 3 ? 20 + 8 * thr : 88 + 28 * thr;
       this.tmpM.compose(
         this.tmpV2.set(x, BASE_Y - 1.5, z),
         this.tmpQ2.identity(),
@@ -1083,7 +1084,7 @@ export class WorldScene {
       this.envelope.scale.set(15 * w, 70 + 25 * heat, 15 * w);
       eu['uIntensity']!.value = (0.42 + 0.36 * heat) * (1 + this.flash * 1.5);
       eu['uChaos']!.value = 1;
-      (eu['uCore']!.value as THREE.Color).setRGB(1.45, 1.02, 0.42);
+      (eu['uCore']!.value as THREE.Color).setRGB(1.6, 0.95, 0.42);
       (eu['uEdge']!.value as THREE.Color).setRGB(1.3, 0.62, 0.05);
       cu['uDiamonds']!.value = 0.35;
       cu['uCells']!.value = 4;
@@ -1091,11 +1092,12 @@ export class WorldScene {
     } else {
       // Three engines: a tight hot pillar, white-gold core falling off to orange. A dimmer
       // shell lets the shock diamonds (Mach disks) read clearly.
-      this.envelope.scale.set(3.6 * spread, 62 + 10 * heat, 3.6 * spread);
+      // A long pillar with a warm pink-orange core and shell (the footage's 3-engine look).
+      this.envelope.scale.set(3.6 * spread, 110 + 20 * heat, 3.6 * spread);
       eu['uIntensity']!.value = (0.3 + 0.2 * heat) * (1 + this.flash);
       eu['uChaos']!.value = 0.25;
-      (eu['uCore']!.value as THREE.Color).setRGB(1.8, 1.35, 0.85);
-      (eu['uEdge']!.value as THREE.Color).setRGB(1.35, 0.55, 0.2);
+      (eu['uCore']!.value as THREE.Color).setRGB(1.9, 1.12, 0.88);
+      (eu['uEdge']!.value as THREE.Color).setRGB(1.45, 0.5, 0.36);
       cu['uDiamonds']!.value = 2.4;
       cu['uCells']!.value = 6.5 + 0.4 * Math.sin(f.t * 5.3 * tm);
       cu['uIntensity']!.value = 0.95 + 0.35 * heat;

@@ -100,8 +100,10 @@ test('Cadet first-run tutorial teaches by doing and hands over to the flight', a
   await expect(page.getByTestId('tutorial')).toBeVisible();
   await expect.poll(async () => (await state(page)).tutorial).toBe('steer');
   const t0 = (await state(page)).t;
+  // The steer step needs STEER_TIME of sim time on the stick; hold until it moves on, so a slow
+  // (clamped-dt) frame rate on a loaded runner cannot make a 1 s wall-clock press too short.
   await page.keyboard.down('KeyD');
-  await page.waitForTimeout(1000);
+  await expect.poll(async () => (await state(page)).tutorial, { timeout: 15_000 }).not.toBe('steer');
   await page.keyboard.up('KeyD');
   await expect.poll(async () => (await state(page)).tutorial).toBe('light');
   // The sim is frozen while the tutorial teaches.

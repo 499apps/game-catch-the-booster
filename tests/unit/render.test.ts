@@ -167,7 +167,7 @@ describe('hull at the catch reads mid-grey, not white', () => {
 });
 
 describe('beach lens in the divert: tight framing', () => {
-  it('drops the tower base, so the booster fills ~30-40% of the frame (vs. ~13% with the base)', () => {
+  it('drops the tower base, so the booster is larger than in the full-tower framing (~22% vs ~13% early in the divert)', () => {
     const com = { x: 20, y: 260, z: 4 };
     const frac = (divert: boolean): number => {
       const rig = new CameraRig('beach', 16 / 9);
@@ -179,9 +179,42 @@ describe('beach lens in the divert: tight framing', () => {
       return (top.y - base.y) / 2;
     };
     const tight = frac(true);
-    expect(tight).toBeGreaterThan(0.28);
-    expect(tight).toBeGreaterThan(1.8 * frac(false));
+    // Early in the divert (CoM 260 m) the ring is ~200 m below the booster top; the booster
+    // grows as it comes down toward the ring.
+    expect(tight).toBeGreaterThan(0.18);
+    expect(tight).toBeGreaterThan(1.4 * frac(false));
   });
+
+  for (const [label, aspect] of [
+    ['desktop 16:9', 16 / 9],
+    ['phone 393x852', 393 / 852],
+  ] as const) {
+    it(`keeps the catch ring in the safe band (clear of the HUD) from +13 s to +20 s, ${label}`, () => {
+      // A Cadet flight (the tutorial practice uses the same lens and framing).
+      const w = createWorld(1, 'cadet');
+      const rig = new CameraRig('beach', aspect);
+      const band = safeBand(aspect);
+      let checked = 0;
+      let guard = 0;
+      while (!w.done && guard++ < 120 * 60) {
+        stepWorld(w, autopilotCommand(w));
+        const tau = tauOf(w);
+        if (tau === null || tau < 13 || tau > 20 || w.step % 30 !== 0) continue;
+        const axis = axisFromTilt(w.tilt);
+        rig.update({ com: w.pos, axis, thrustFrac: 0.3, t: w.t, reducedMotion: true, divert: true }, 0, true);
+        const c = rig.camera;
+        c.updateMatrixWorld();
+        const q = new THREE.Vector3(0, RAIL_Y + 0.4, 0).project(c);
+        const where = `tau ${tau.toFixed(1)}: ring at ndc (${q.x.toFixed(2)}, ${q.y.toFixed(2)})`;
+        expect(q.z, where).toBeLessThan(1);
+        expect(Math.abs(q.x), where).toBeLessThan(1);
+        expect(q.y, where).toBeGreaterThan(-1 + 2 * band.bottom - 1e-3);
+        expect(q.y, where).toBeLessThan(1 - 2 * band.top + 1e-3);
+        checked++;
+      }
+      expect(checked).toBeGreaterThan(10);
+    });
+  }
 });
 
 describe('auto-director holds the shot while the player steers', () => {

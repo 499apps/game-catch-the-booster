@@ -3,6 +3,11 @@
 import { formatReplayTime, type ReplayClock } from '../app/scrubber';
 import { el, setText, show } from './dom';
 
+/** "+00:12.3" / "-00:02.0": a signed replay time (from ignition). */
+export function formatSigned(t: number): string {
+  return `${t < 0 ? '-' : '+'}${formatReplayTime(Math.abs(t))}`;
+}
+
 export interface ReplayBarHandlers {
   onToggle: () => void;
   onSeek: (frac: number) => void;
@@ -30,6 +35,8 @@ export class ReplayBar {
   private readonly splitBtn = el('button', { class: 'rb', 'data-testid': 'replay-split', 'aria-pressed': 'false', text: '⊞ Split 15 s' });
   private readonly camBtn = el('button', { class: 'rb', 'data-testid': 'replay-cam', text: 'Cam ⟳' });
   private readonly window = el('i', { class: 'window' });
+  /** Phones: the split-view tag lives in the bar (it would sit on a panel otherwise). */
+  private readonly splitTag = el('span', { class: 'split-tag', 'data-testid': 'replay-split-tag', text: 'SPLIT · SYNCED' });
   private dragging = false;
 
   constructor(parent: HTMLElement, h: ReplayBarHandlers) {
@@ -37,6 +44,7 @@ export class ReplayBar {
     const track = el('div', { class: 'scrub-wrap' }, [this.window, this.scrub]);
     this.root = el('div', { id: 'replay-bar', class: 'ui', 'data-testid': 'replay-bar', role: 'toolbar', 'aria-label': 'Replay controls' }, [
       el('span', { class: 'tag', text: '● REPLAY' }),
+      this.splitTag,
       this.playBtn,
       track,
       this.time,
@@ -66,14 +74,20 @@ export class ReplayBar {
     show(this.root, on);
   }
 
-  update(c: ReplayClock, split: boolean): void {
+  /**
+   * `ignitionT`: sim time of the ignition. When known, the time reads T- / T+ from ignition,
+   * the same clock as the flight HUD (the run starts with the 3 s pre-roll before it).
+   */
+  update(c: ReplayClock, split: boolean, ignitionT: number | null = null): void {
     setText(this.playBtn, c.playing ? '❚❚' : '▶');
     this.playBtn.setAttribute('aria-label', c.playing ? 'Pause' : 'Play');
     if (!this.dragging) {
       const v = String(Math.round(c.frac * 1000));
       if (this.scrub.value !== v) this.scrub.value = v;
     }
-    setText(this.time, `${formatReplayTime(c.t)} / ${formatReplayTime(c.duration)}`);
+    show(this.splitTag, split);
+    if (ignitionT !== null) setText(this.time, `T${formatSigned(c.t - ignitionT)} / T${formatSigned(c.duration - ignitionT)}`);
+    else setText(this.time, `${formatReplayTime(c.t)} / ${formatReplayTime(c.duration)}`);
     setText(this.speedBtn, `${c.speed}×`);
     this.splitBtn.setAttribute('aria-pressed', String(split));
     this.splitBtn.classList.toggle('sel', split);

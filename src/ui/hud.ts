@@ -65,6 +65,8 @@ export interface HudData {
   steerCue: boolean;
   /** Cadet: the stick is pushed but the aim does not move: pulse the arrow, "Other way". */
   wrongWay: boolean;
+  /** Tutorial steer step: the lesson's instruction, shown in the steer banner (null: the default). */
+  steerText?: string | null;
   /** Pilot / FD: propellant 0..1 for the short PROP chip (compact phone strip); null hides it. */
   propChip: number | null;
   /** Cadet: the board folds into one GO chip. */
@@ -440,7 +442,11 @@ export class Hud {
       const wrong = d.wrongWay && !on;
       setText(
         this.steerText,
-        on ? 'On the ring ✓' : wrong ? `Other way ↺ · push along the arrow · ${fmt(d.pin.dist, 1)} m` : `Steer onto the ring · ${fmt(d.pin.dist, 1)} m`,
+        on
+          ? 'On the ring ✓'
+          : wrong
+            ? `Other way ↺ · push along the arrow · ${fmt(d.pin.dist, 1)} m`
+            : `${d.steerText ?? 'Steer onto the ring'} · ${fmt(d.pin.dist, 1)} m`,
       );
       const cls = on ? 'ok' : wrong ? 'wrong' : '';
       if (this.steer.className !== cls) this.steer.className = cls;

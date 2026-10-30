@@ -75,6 +75,14 @@ const SPLIT_CAMS: readonly CameraId[] = ['beach', 'towerTop', 'chase', 'wide'];
 const YAW_BLEND = 0.5;
 /** s: the player counts as steering for this long after the last stick deflection. */
 const STEER_MEMORY = 1.2;
+/** One-word camera names for the touch camera tag. */
+const CAMERA_SHORT: Record<CameraId, string> = { towerTop: 'TOWER', beach: 'BEACH', chase: 'DRONE', onboard: 'ONBOARD', wide: 'WIDE' };
+/** The tutorial steer lesson, as shown in the steer banner next to the arrow. */
+const STEER_LESSON: Record<InputKind, string> = {
+  touch: 'Drag the pad the way the arrow points',
+  keys: 'Hold the arrow key (or WASD) the arrow points to',
+  pad: 'Push the stick the way the arrow points',
+};
 /** s: a pushed stick that has not moved the Cadet aim for this long shows "Other way". */
 const WRONG_WAY_DELAY = 0.4;
 /** The 3-2-1 ignition cue shows from this many seconds before the ideal ignition. */
@@ -755,7 +763,7 @@ export class Game {
    * Cadet: the stick is pushed but the aim point does not move (the push points away from the
    * ring), measured each frame. After WRONG_WAY_DELAY the HUD pulses the arrow: "Other way".
    */
-  private updateWrongWay(w: World, dt: number): void {
+  private updateWrongWay(w: World, dt: number, push = this.devices.rawStick): void {
     const a = Math.hypot(w.aim.x, w.aim.z);
     const moved = Math.abs(a - this.lastAimDist) > 1e-6;
     this.lastAimDist = a;
@@ -765,7 +773,23 @@ export class Game {
       !w.done &&
       a >= CADET_ON_RING &&
       pinHeightAboveRails(w.pos, w.tilt) > CADET_AIM_FREEZE;
-    this.wrongFor = canMove && this.devices.rawStick > 0.3 && !moved ? this.wrongFor + dt : 0;
+    this.wrongFor = canMove && push > 0.3 && !moved ? this.wrongFor + dt : 0;
+  }
+
+  /**
+   * The camera tag. Touch screens get one short word (BEACH, TOWER, DRONE, PRACTICE...) so it
+   * fits on one line between the thumbs; wide screens the full name and "· auto".
+   */
+  private cameraTag(mode: 'live' | 'practice' | 'replay' | 'split'): string {
+    const touch = this.app.classList.contains('touch');
+    if (mode === 'split') return touch ? 'SPLIT' : 'Split · synced cams';
+    if (touch) {
+      if (mode === 'practice') return 'PRACTICE';
+      const short = CAMERA_SHORT[this.camera];
+      return mode === 'replay' ? `${short} · REPLAY` : short;
+    }
+    const name = `${CAMERA_LABELS[this.camera]}${this.manualCam ? '' : ' · auto'}`;
+    return mode === 'practice' ? `Practice · ${name}` : mode === 'replay' ? `${name} · REPLAY` : name;
   }
 
   /** True while the player has been on the stick recently. */
@@ -973,7 +997,7 @@ export class Game {
     this.replay = null;
     this.replayBar.setVisible(false);
     this.splitLabels.hidden = true;
-    this.app.classList.remove('replaying');
+    this.app.classList.remove('replaying', 'split-view');
     this.audio.resetRun();
   }
 
@@ -1287,7 +1311,8 @@ export class Game {
     this.audio.updateRoar(f.t, level, f.phase === 'burn3', dist, 0);
     this.audio.setMusic(0.3, rp.clock.playing);
     this.hud.update(this.replayHud(rp, f), this.realTime);
-    this.replayBar.update(rp.clock, rp.split);
+    this.replayBar.update(rp.clock, rp.split, rp.tl.ignitionT);
+    if (this.app.classList.contains('split-view') !== rp.split) this.app.classList.toggle('split-view', rp.split);
     this.updateTestState();
   }
 
@@ -1370,7 +1395,7 @@ export class Game {
       wind,
       sensorFault: cfg.id === 'fd' && w.faults.towerSensor,
       slowMo: slowMoActive(w),
-      camera: `${practice ? 'Practice · ' : ''}${CAMERA_LABELS[this.camera]}${this.manualCam ? '' : ' · auto'}`,
+      camera: this.cameraTag(practice ? 'practice' : 'live'),
       fps: this.hooks.fps && !this.hooks.still ? this.fps : null,
       paused: this.paused,
       pin,
@@ -1394,6 +1419,9 @@ export class Game {
       d.igniteIn = null;
       d.cue = null;
       d.steerCue = practice;
+      // The steer lesson's words live in the banner by the arrow (the card shrinks to a pill
+      // on touch and docks top right on desktop, off the practice booster).
+      if (practice) d.steerText = STEER_LESSON[this.inputKind()];
     }
     return d;
   }
@@ -1426,7 +1454,7 @@ export class Game {
       wind: null,
       sensorFault: false,
       slowMo: false,
-      camera: rp.split ? 'Split · synced cams' : `${CAMERA_LABELS[this.camera]}${this.manualCam ? '' : ' · auto'} · REPLAY`,
+      camera: this.cameraTag(rp.split ? 'split' : 'replay'),
       fps: this.hooks.fps && !this.hooks.still ? this.fps : null,
       paused: false,
       pin: null,
@@ -1506,13 +1534,18 @@ export class Game {
         }
         let input = NEUTRAL_INPUT;
         if (manual && w.flags.divert) {
-          // `stick=arrow`: full stick along the HUD arrow (aim -> ring centre), in world axes.
+          // `stick=arrow` / `stick=away`: full stick along / against the HUD arrow (aim -> ring
+          // centre), in world axes; otherwise world x.
           const a = Math.hypot(w.aim.x, w.aim.z);
-          input = h.stickArrow
-            ? { ...NEUTRAL_INPUT, stickX: a > 1e-6 ? -w.aim.x / a : 0, stickZ: a > 1e-6 ? -w.aim.z / a : 0 }
-            : { ...NEUTRAL_INPUT, stickX: h.stick };
+          const k = h.stickArrow ? -1 : h.stickAway ? 1 : 0;
+          input =
+            k !== 0 && a > 1e-6
+              ? { ...NEUTRAL_INPUT, stickX: (k * w.aim.x) / a, stickZ: (k * w.aim.z) / a }
+              : { ...NEUTRAL_INPUT, stickX: h.stick };
         }
         stepWorld(w, commandFor(w, input, !manual));
+        // The "Other way" timer, as the frame loop would run it.
+        if (manual) this.updateWrongWay(w, DT, Math.hypot(input.stickX, input.stickZ));
       }
       r.eventIndex = w.events.length;
       r.contactT = w.contact?.t ?? null;

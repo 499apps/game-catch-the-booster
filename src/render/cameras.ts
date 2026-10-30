@@ -68,7 +68,8 @@ export interface ShotInput {
   impact?: number | null;
   /**
    * The divert (from T_DIVERT until the arms close): the beach lens frames the booster and
-   * the tower top only, so the booster fills ~40% of the frame and the steering reads.
+   * the catch ring only (no tower base), so the booster is large, the steering reads and the
+   * target stays in view.
    */
   divert?: boolean;
 }
@@ -254,9 +255,9 @@ export class CameraRig {
         wantPos.set(BEACH_CAM.x, BEACH_CAM.y, BEACH_CAM.z);
         const pts = [top, plumeEnd];
         if (s.divert) {
-          // Steering: the booster, its plume and the tower top only (no tower base), so the
-          // booster is large and the ring at the arms reads.
-          pts.push(new THREE.Vector3(TOWER_X, TOWER_HEIGHT + 12, 0));
+          // Steering: the booster, its plume and the catch ring (just under it), no tower base.
+          // The booster stays as large as it can while the ring - the target - is in view.
+          pts.push(new THREE.Vector3(0, RAIL_Y - 8, 0));
         } else if (com.y < 420) {
           pts.push(new THREE.Vector3(TOWER_X, TOWER_HEIGHT + 12, 0), new THREE.Vector3(TOWER_X, 0, 0));
         }

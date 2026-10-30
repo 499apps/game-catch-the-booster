@@ -32,6 +32,8 @@ export interface Hooks {
   stick: number;
   /** Still mode with `manual`: `stick=arrow` holds full stick along the HUD steer arrow. */
   stickArrow: boolean;
+  /** Still mode with `manual`: `stick=away` holds full stick against the arrow ("Other way"). */
+  stickAway: boolean;
 }
 
 const QUALITY_IDS: readonly string[] = ['auto', 'low', 'medium', 'high'];
@@ -68,5 +70,6 @@ export function parseHooks(search: string): Hooks {
     manual: p.get('manual') === '1',
     stick: Math.min(Math.max(num(p.get('stick')) ?? 0, -1), 1),
     stickArrow: p.get('stick') === 'arrow',
+    stickAway: p.get('stick') === 'away',
   };
 }

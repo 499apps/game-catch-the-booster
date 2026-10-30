@@ -45,12 +45,19 @@ const STILLS = [
   ['debrief', 'still=1&tier=cadet&seed=1&debrief=1&quality=medium'],
 ];
 
-/** Player's-view stills (no autopilot): the 3-2-1 cue, the steer arrow with the stick held, the tutorial. */
+/**
+ * Player's-view stills (no autopilot): the 3-2-1 cue, the steer arrow with the stick along it
+ * and against it ("Other way"), the tutorial steer step, and a Pilot flight (PROP chip).
+ */
 const MANUAL_STILLS = [
   ['cadet-cue', 'still=1&tier=cadet&seed=1&manual=1&at=-2&quality=medium'],
   // Full stick along the arrow for 0.4 s since the divert: the PIN has started to fall.
   ['cadet-steer', 'still=1&tier=cadet&seed=1&manual=1&stick=arrow&at=13.4&quality=medium'],
+  // Full stick against the arrow for 1 s (> 0.4 s): the banner pulses "Other way".
+  ['cadet-wrongway', 'still=1&tier=cadet&seed=1&manual=1&stick=away&at=14&quality=medium'],
   ['tutorial-steer', 'still=1&tier=cadet&seed=1&tutorial=1&quality=medium'],
+  // Pilot in flight on 3 engines: the phone strip with the PROP chip.
+  ['pilot-flight', 'still=1&tier=pilot&seed=2&at=10&quality=medium'],
 ];
 /** The player's-view stills are taken on these profiles. */
 const MANUAL_PROFILES = ['desktop', 'iphone'];
