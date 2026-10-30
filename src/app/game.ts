@@ -20,7 +20,7 @@ import {
 import { AdaptiveQuality, autoStartTier } from '../render/quality';
 import type { FrameState } from '../render/scene';
 import { View, hasWebGL2 } from '../render/view';
-import { ghostPath } from '../sim/autopilot';
+import { CADET_AIM_FREEZE, ghostPath } from '../sim/autopilot';
 import {
   BOOSTER_DIAMETER,
   CONTACT_CLEAN,
@@ -51,7 +51,7 @@ import { windAt } from '../sim/wind';
 import { createWorld, scoreWorld, slowMoActive, stepWorld, tauOf } from '../sim/world';
 import { clearMyData } from '../sw-register';
 import { el } from '../ui/dom';
-import { Hud, type HudData } from '../ui/hud';
+import { CADET_ON_RING, Hud, type HudData } from '../ui/hud';
 import { cadetPinTone, pinTone, tiltTone, type Tone } from '../ui/tolerance';
 import { Menu, type DebriefData } from '../ui/menu';
 import { ReplayBar } from '../ui/replaybar';
@@ -75,6 +75,8 @@ const SPLIT_CAMS: readonly CameraId[] = ['beach', 'towerTop', 'chase', 'wide'];
 const YAW_BLEND = 0.5;
 /** s: the player counts as steering for this long after the last stick deflection. */
 const STEER_MEMORY = 1.2;
+/** s: a pushed stick that has not moved the Cadet aim for this long shows "Other way". */
+const WRONG_WAY_DELAY = 0.4;
 /** The 3-2-1 ignition cue shows from this many seconds before the ideal ignition. */
 const CUE_SECONDS = 3.5;
 /** m/s^2: the gentle braking the V/S tone allows for (reach 2 m/s at the rails from here). */
@@ -226,6 +228,9 @@ export class Game {
   private yawBlend = 1;
   private yawCam: CameraId | null = null;
   private lastSteerReal = -1e9;
+  /** Cadet "Other way": seconds the stick has been pushed while the aim did not move. */
+  private wrongFor = 0;
+  private lastAimDist = 0;
   private practice: Practice | null = null;
   private manualCam: CameraId | null = null;
   private camera: CameraId = 'wide';
@@ -582,6 +587,8 @@ export class Game {
     this.director.reset();
     this.view?.resetCameras();
     const world = createWorld(o.seed, tier);
+    // The autopilot flies to the centre and ignores the Cadet aim point: show that on the HUD.
+    if (o.autopilot) world.aim = { x: 0, z: 0 };
     this.run = {
       world,
       tier,
@@ -742,6 +749,23 @@ export class Game {
     this.yawBlend = Math.min(1, this.yawBlend + dt / YAW_BLEND);
     const k = this.yawBlend * this.yawBlend * (3 - 2 * this.yawBlend);
     this.stickYaw = k >= 1 ? target : lerpAngle(this.yawFrom, target, k);
+  }
+
+  /**
+   * Cadet: the stick is pushed but the aim point does not move (the push points away from the
+   * ring), measured each frame. After WRONG_WAY_DELAY the HUD pulses the arrow: "Other way".
+   */
+  private updateWrongWay(w: World, dt: number): void {
+    const a = Math.hypot(w.aim.x, w.aim.z);
+    const moved = Math.abs(a - this.lastAimDist) > 1e-6;
+    this.lastAimDist = a;
+    const canMove =
+      w.cfg.control === 'cadet' &&
+      w.flags.divert &&
+      !w.done &&
+      a >= CADET_ON_RING &&
+      pinHeightAboveRails(w.pos, w.tilt) > CADET_AIM_FREEZE;
+    this.wrongFor = canMove && this.devices.rawStick > 0.3 && !moved ? this.wrongFor + dt : 0;
   }
 
   /** True while the player has been on the stick recently. */
@@ -1046,7 +1070,10 @@ export class Game {
           ignite: input.ignite,
           closeArms: input.closeArms,
         });
-        if (t.step === 'steer' && this.practice) this.stepPractice(this.practice, input, dt * this.hooks.timescale);
+        if (t.step === 'steer' && this.practice) {
+          this.stepPractice(this.practice, input, dt * this.hooks.timescale);
+          this.updateWrongWay(this.practice.world, dt);
+        }
         if (t.step !== before) {
           if (before === 'steer') {
             // Back to the frozen run: the cameras jump to it.
@@ -1062,6 +1089,7 @@ export class Game {
         if (r.tier === 'cadet' && !r.autopilot && input.ignite && r.world.phase === 'coast') r.lightArmed = true;
         const scale = this.hooks.timescale * (slowMoActive(r.world) ? SLOW_MO : 1);
         if (!r.world.done) this.stepRun(r, input, dt * scale);
+        this.updateWrongWay(r.world, dt);
         if (r.world.done) this.finishRun(r);
         this.devices.rumble(r.world.done ? 0 : engineFrac(r.world.engines), now);
       }
@@ -1078,7 +1106,7 @@ export class Game {
     splash: FrameState['splash'],
     aids: FrameState['aids'],
     hero: boolean,
-    after: { impact: number | null; vent: number; sinceCutoff?: number | null },
+    after: { impact: number | null; vent: number; sinceCutoff?: number | null; divert?: boolean },
   ): { frame: FrameState; shot: ShotInput } {
     const thrustFrac = src.thrust / (ENGINE_COUNT * ENGINE_THRUST);
     const reduced = this.reducedMotion;
@@ -1107,6 +1135,7 @@ export class Game {
       reducedMotion: reduced,
       hero,
       impact: after.impact,
+      divert: after.divert ?? false,
     };
     return { frame, shot };
   }
@@ -1156,7 +1185,9 @@ export class Game {
     if (active && r && r.contactT !== null && w.contact) {
       sinceCutoff = w.t - r.contactT + (r.doneAtReal !== null && !this.hooks.still ? this.realTime - r.doneAtReal : 0);
     }
-    return this.makeFrame(srcFromWorld(w), t, pos, splash, aids, hero, { impact, vent, sinceCutoff });
+    const tauNow = tauOf(w);
+    const divert = flying && tauNow !== null && tauNow >= T_DIVERT && !w.arms.closing;
+    return this.makeFrame(srcFromWorld(w), t, pos, splash, aids, hero, { impact, vent, sinceCutoff, divert });
   }
 
   /** The frame for the replay player at its clock time. */
@@ -1175,7 +1206,13 @@ export class Game {
     const impact = contact !== null && rp.clock.t >= contact ? rp.clock.t - contact : null;
     const vent = f.phase === 'caught' || f.phase === 'settling' ? 1 : 0;
     const sinceCutoff = contact !== null && rp.clock.t >= contact ? rp.clock.t - contact : null;
-    const { frame, shot } = this.makeFrame(src, rp.clock.t, pos, splash, this.noAids(TIER_CONFIG[rp.tier].pinWindow), false, { impact, vent, sinceCutoff });
+    const divert = (f.phase === 'burn13' || f.phase === 'burn3') && f.tau !== null && f.tau >= T_DIVERT && !f.armsClosing;
+    const { frame, shot } = this.makeFrame(src, rp.clock.t, pos, splash, this.noAids(TIER_CONFIG[rp.tier].pinWindow), false, {
+      impact,
+      vent,
+      sinceCutoff,
+      divert,
+    });
     return { frame, shot, f };
   }
 
@@ -1191,8 +1228,8 @@ export class Game {
     const practice = r && this.tutorial?.step === 'steer' ? this.practice : null;
     const w = practice ? practice.world : r ? r.world : this.menuBackdrop;
     if (practice) {
-      // The wide shot holds still: the whole swing toward the tower reads left-right.
-      this.camera = this.manualCam ?? 'wide';
+      // The tight divert framing of the beach lens: the practice booster is large.
+      this.camera = this.manualCam ?? 'beach';
     } else if (r) {
       const tau = tauOf(w);
       const auto = this.director.update(w.phase, tau, w.arms.closing, r.contactT ?? r.world.outcome?.t ?? null, w.t, this.steering);
@@ -1343,6 +1380,9 @@ export class Game {
       lightArmed: cadet && r.lightArmed && w.phase === 'coast',
       // From the divert until contact (it reads "On the ring" once the aim is centred).
       steerCue: cadet && !r.autopilot && pin !== null,
+      wrongWay: cadet && !r.autopilot && this.wrongFor >= WRONG_WAY_DELAY,
+      // Pilot / FD manage the fuel: a short PROP chip for the compact phone strip.
+      propChip: cadet ? null : Math.min(1, w.propellant / prop0),
       foldBoard: cadet,
     };
     if (tut) {
@@ -1395,6 +1435,8 @@ export class Game {
       cue: null,
       lightArmed: false,
       steerCue: false,
+      wrongWay: false,
+      propChip: null,
       foldBoard: rp.tier === 'cadet',
     };
   }
@@ -1462,7 +1504,14 @@ export class Game {
           const down = Math.max(-w.vel.y, 1);
           if ((w.pos.y - idealIgnitionHeight(down)) / down <= -limit) break;
         }
-        const input = manual && w.flags.divert ? { ...NEUTRAL_INPUT, stickX: h.stick } : NEUTRAL_INPUT;
+        let input = NEUTRAL_INPUT;
+        if (manual && w.flags.divert) {
+          // `stick=arrow`: full stick along the HUD arrow (aim -> ring centre), in world axes.
+          const a = Math.hypot(w.aim.x, w.aim.z);
+          input = h.stickArrow
+            ? { ...NEUTRAL_INPUT, stickX: a > 1e-6 ? -w.aim.x / a : 0, stickZ: a > 1e-6 ? -w.aim.z / a : 0 }
+            : { ...NEUTRAL_INPUT, stickX: h.stick };
+        }
         stepWorld(w, commandFor(w, input, !manual));
       }
       r.eventIndex = w.events.length;

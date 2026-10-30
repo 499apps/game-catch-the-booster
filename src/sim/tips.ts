@@ -5,7 +5,8 @@ import type { FailReason } from './types';
 
 export const TIPS: Record<FailReason, string> = {
   noGo: 'Good thinking! The booster splashed down safely. Check the health board: all green means GO.',
-  lateIgnition: 'Light the engines when the stop-height marker reaches the arms. A little early is safer than late.',
+  // STOP is on every screen (the phone strip shows the number, not the marker bar).
+  lateIgnition: 'Light the engines on the 3-2-1 cue, before STOP reaches 0 m. A little early is safer than late.',
   flameout: 'Save some fuel: light the engines a little later and step down to 3 engines on time.',
   late: 'Press CATCH as soon as the button glows. The arms need about 5 seconds to close.',
   early: 'Wait a moment longer before CATCH. The pins should be less than 20 m above the arms when they close.',

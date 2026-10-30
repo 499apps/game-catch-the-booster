@@ -66,6 +66,11 @@ export interface ShotInput {
   hero?: boolean;
   /** Seconds since the pins touched the rails (drives the settle bounce), or null. */
   impact?: number | null;
+  /**
+   * The divert (from T_DIVERT until the arms close): the beach lens frames the booster and
+   * the tower top only, so the booster fills ~40% of the frame and the steering reads.
+   */
+  divert?: boolean;
 }
 
 const expK = (dt: number, tau: number): number => (tau <= 0 ? 1 : 1 - Math.exp(-dt / tau));
@@ -248,13 +253,17 @@ export class CameraRig {
       case 'beach': {
         wantPos.set(BEACH_CAM.x, BEACH_CAM.y, BEACH_CAM.z);
         const pts = [top, plumeEnd];
-        if (com.y < 420) {
+        if (s.divert) {
+          // Steering: the booster, its plume and the tower top only (no tower base), so the
+          // booster is large and the ring at the arms reads.
+          pts.push(new THREE.Vector3(TOWER_X, TOWER_HEIGHT + 12, 0));
+        } else if (com.y < 420) {
           pts.push(new THREE.Vector3(TOWER_X, TOWER_HEIGHT + 12, 0), new THREE.Vector3(TOWER_X, 0, 0));
         }
         // Long lens: the subject sits in the band below the HUD strip.
         // Portrait phones are narrow: allow a wider lens so tower and booster both fit.
         const band = safeBand(c.aspect);
-        const f = frameInSafe(wantPos, pts, c.aspect, band.top, band.bottom, 1.2, 0.8, c.aspect < 1 ? 48 : 30);
+        const f = frameInSafe(wantPos, pts, c.aspect, band.top, band.bottom, s.divert ? 1.05 : 1.2, 0.8, c.aspect < 1 ? 48 : 30);
         wantTarget.copy(f.target);
         fov = f.fov * (1 + 0.12 * this.pull);
         targetTau = 0.45;
@@ -386,8 +395,11 @@ export class AutoDirector {
   current: CameraId = 'wide';
   private since = -1e9;
   static readonly MIN_HOLD = 2.5;
-  /** Seconds after ignition in which a steering player keeps the current shot. */
-  static readonly STEER_HOLD: readonly [number, number] = [13, 23];
+  /**
+   * Seconds after ignition in which a steering player keeps the current shot. It ends at the
+   * +20 s cut to the tower top, which always happens (the final approach and the arms).
+   */
+  static readonly STEER_HOLD: readonly [number, number] = [13, 20];
 
   reset(): void {
     this.current = 'wide';
@@ -403,8 +415,8 @@ export class AutoDirector {
     if (tau < 4) return 'beach'; // ignition on 13
     if (tau < 10) return 'chase'; // step-down to 3, shock diamonds
     if (tau < T_DIVERT) return 'wide'; // the hold beside the tower, the whole scene
-    // The divert: the beach long lens, where the booster and the ring read well while the
-    // player steers (the wide lens shows the booster ~90 px tall and the ring not at all).
+    // The divert: the beach long lens in its tight divert framing (ShotInput.divert), where
+    // the booster fills ~40% of the frame while the player steers.
     return 'beach';
   }
 

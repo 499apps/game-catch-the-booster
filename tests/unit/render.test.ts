@@ -18,6 +18,8 @@ import {
 import { rotateStick } from '../../src/input/mapping';
 import { FINAL_APPROACH_HEIGHT, TILT_ABORT_DEG, cadetPinTone, pinTone, tiltTone } from '../../src/ui/tolerance';
 import { WATERLINE_X, terrainHeight } from '../../src/render/terrain';
+import { HULL_TONE } from '../../src/render/materials';
+import { HULL_ENV, HULL_ENV_HELD } from '../../src/render/scene';
 import { autopilotCommand } from '../../src/sim/autopilot';
 import { BOOSTER_LENGTH, COM_ABOVE_BASE, PIN_ABOVE_COM, RAIL_Y, TOWER_HEIGHT, TOWER_X } from '../../src/sim/constants';
 import type { TierId } from '../../src/sim/tiers';
@@ -155,6 +157,33 @@ describe('camera-relative steering', () => {
   });
 });
 
+describe('hull at the catch reads mid-grey, not white', () => {
+  it('the stainless is rough and mid-tone, and duller once held in the arms', () => {
+    expect(HULL_TONE.roughMin / 255).toBeGreaterThanOrEqual(0.4); // not a near-mirror
+    expect(HULL_TONE.albedo / 255).toBeLessThanOrEqual(0.62); // mid-grey, not white
+    expect(HULL_ENV_HELD).toBeLessThan(HULL_ENV);
+    expect(HULL_ENV_HELD).toBeLessThanOrEqual(0.7);
+  });
+});
+
+describe('beach lens in the divert: tight framing', () => {
+  it('drops the tower base, so the booster fills ~30-40% of the frame (vs. ~13% with the base)', () => {
+    const com = { x: 20, y: 260, z: 4 };
+    const frac = (divert: boolean): number => {
+      const rig = new CameraRig('beach', 16 / 9);
+      rig.update({ com, axis: { x: 0, y: 1, z: 0 }, thrustFrac: 0.2, t: 16, reducedMotion: true, divert }, 0, true);
+      const c = rig.camera;
+      c.updateMatrixWorld();
+      const top = new THREE.Vector3(com.x, com.y + BOOSTER_LENGTH - COM_ABOVE_BASE, com.z).project(c);
+      const base = new THREE.Vector3(com.x, com.y - COM_ABOVE_BASE, com.z).project(c);
+      return (top.y - base.y) / 2;
+    };
+    const tight = frac(true);
+    expect(tight).toBeGreaterThan(0.28);
+    expect(tight).toBeGreaterThan(1.8 * frac(false));
+  });
+});
+
 describe('auto-director holds the shot while the player steers', () => {
   const fly = (steering: boolean): Map<number, CameraId> => {
     const d = new AutoDirector();
@@ -165,12 +194,13 @@ describe('auto-director holds the shot while the player steers', () => {
     }
     return shots;
   };
-  it('cuts from the wide shot to the beach lens at the divert, then holds it while steering (no cut to 23 s)', () => {
+  it('cuts from the wide shot to the beach lens at the divert, holds it while steering, and still cuts to the tower top at +20 s', () => {
     const steer = fly(true);
     expect(steer.get(120)).toBe('wide');
     // The cut at T_DIVERT (13 s) still happens (within a step of float rounding).
-    for (let k = 132; k < 230; k++) expect(steer.get(k), `tau ${k / 10}`).toBe('beach');
-    expect(steer.get(240)).toBe('towerTop');
+    for (let k = 132; k < 199; k++) expect(steer.get(k), `tau ${k / 10}`).toBe('beach');
+    // The +20 s tower-top cut happens even while the player steers.
+    for (let k = 202; k < 260; k++) expect(steer.get(k), `tau ${k / 10}`).toBe('towerTop');
     const free = fly(false);
     expect(free.get(120)).toBe('wide');
     expect(free.get(170)).toBe('beach');

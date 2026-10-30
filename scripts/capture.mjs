@@ -48,7 +48,8 @@ const STILLS = [
 /** Player's-view stills (no autopilot): the 3-2-1 cue, the steer arrow with the stick held, the tutorial. */
 const MANUAL_STILLS = [
   ['cadet-cue', 'still=1&tier=cadet&seed=1&manual=1&at=-2&quality=medium'],
-  ['cadet-steer', 'still=1&tier=cadet&seed=1&manual=1&stick=-1&at=13.5&quality=medium'],
+  // Full stick along the arrow for 0.4 s since the divert: the PIN has started to fall.
+  ['cadet-steer', 'still=1&tier=cadet&seed=1&manual=1&stick=arrow&at=13.4&quality=medium'],
   ['tutorial-steer', 'still=1&tier=cadet&seed=1&tutorial=1&quality=medium'],
 ];
 /** The player's-view stills are taken on these profiles. */

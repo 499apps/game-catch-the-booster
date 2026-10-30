@@ -178,6 +178,36 @@ On landscape, the tower-top pitch now blends with the CoM height:
 
 So a player who picks Tower Top mid-divert still sees the booster.
 
+## c7: gate-3 fixes
+
+I could not run any tools. Nothing in c7 is verified.
+
+| # | Finding | Fix | Files |
+| --- | --- | --- | --- |
+| 1 | Tutorial hides the steer | On touch, `#tutorial` docks under the strip and under the steer arrow (top +172 px). In the steer step it is a small card (no dots, 14-15 px text). `#captions` is hidden (`display: none`) while `.tutorial` is set. The practice camera is `beach` with the tight divert framing. | `src/ui/styles.css`, `src/app/game.ts` |
+| 2 | Divert lens too far | `ShotInput.divert` (tau ≥ T_DIVERT, flying, arms not closing). The `beach` rig then frames only the booster top, the plume end and the tower top + 12 m, with a tighter margin (1.05). The booster fills about 30-35% of the frame, against about 13% before. `STEER_HOLD` is now [13, 20], so the +20 s cut to the tower top always happens. The ring is at least 24 px across on any lens (`fitRingToCamera`, main view only). | `src/render/cameras.ts`, `src/render/scene.ts`, `src/render/view.ts`, `src/app/game.ts` |
+| 3 | Wrong-way push is silent | `updateCadetAim` keeps only the radial component of the stick toward the centre, capped at the centre. One key of a diagonal arrow helps, and a wrong-way push does nothing. No input can score worse than hands-off. If the stick is pushed for 0.4 s and the aim does not move, the arrow pulses and says "Other way ↺ · push along the arrow" (a glow with reduced motion). In capture, `cadet-steer` uses the new hook `stick=arrow` at +13.4 s. | `src/sim/world.ts`, `src/app/game.ts`, `src/ui/hud.ts`, `src/ui/styles.css`, `src/app/params.ts`, `scripts/capture.mjs` |
+| 4 | Banner over the tower | `#steer-cue` is now a child of `#telemetry`. It sits just above the strip on desktop and just under it on touch. On phones it may wrap, and it stays within the strip width. | `src/ui/hud.ts`, `src/ui/styles.css` |
+| 5 | White hull | New `HULL_TONE`: albedo 152 (was 192), roughness 0.42-0.54 (was 0.25-0.34). The brushing streaks are darker. The env reflection is 0.6 once the booster is held (was 0.95). The land steam is grey-white, not beige. A unit test checks the constants. I could not take a bloom-off frame. | `src/render/materials.ts`, `src/render/scene.ts` |
+| 6 | Phones hide PROP and STOP | Pilot and FD get a "PROP 47%" chip in the wrapping tolerance group: row 2 is not changed, and the chips wrap instead of widening the grid. It is amber below 15%. The late-ignition tip now reads "before STOP reaches 0 m". | `src/ui/hud.ts`, `src/ui/styles.css`, `src/app/game.ts`, `src/sim/tips.ts` |
+| 9 | Autopilot HUD mismatch | Autopilot runs set `w.aim = {0, 0}`, which is HUD-only: the autopilot ignores the aim. | `src/app/game.ts` |
+| 10 | Polish | Touch camera tag: one line with an ellipsis, between the joystick and the throttle. Touch LIGHT and the 3-2-1 cue sit above the joystick. Replay tag: right side on desktop (clear of DRONE CHASE), under the strip at the top on phones (clear of the replay bar). The fps counter shows only with `fps=1`. | `src/ui/styles.css`, `src/app/params.ts` |
+
+**Tests:**
+
+- `assist.test.ts`: one key of a diagonal brings the aim in, and the opposite key leaves it unchanged (5 seeds). The never-worse-than-hands-off test with slam and hold still runs on the projection rule.
+- `render.test.ts`:
+  - The beach divert framing: the booster takes more than 28% of the height, and at least 1.8× the old framing.
+  - The steer hold ends at +20 s with a cut to the tower top.
+  - The hull tone constants.
+
+**Not done:**
+
+- The 5-person playtest (finding 7).
+- A bloom-off diagnostic frame for the hull (finding 5). I fixed it from the material values. Please check `*-catch.png`.
+- The clock offset between the HUD (T+ from ignition) and the replay (from the run start). I left it: it is the pre-roll by design.
+- Regenerate the visual baselines only after the e2e run passes. The beach divert framing, the steer cue position, the hull tone and the phone layout all change them.
+
 ## Commands for the operator (in order)
 
 1. `pnpm typecheck`

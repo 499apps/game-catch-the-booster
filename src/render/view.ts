@@ -181,6 +181,7 @@ export class View {
     const aspect = this.width / this.height;
     if (Math.abs(rig.camera.aspect - aspect) > 1e-4) rig.setAspect(aspect);
     rig.update(shot, dt, snap);
+    this.world.fitRingToCamera(rig.camera, this.height);
     // A plume close to the lens: less bloom and streak, so the core and diamonds still read.
     const near = this.world.tuneForCamera(rig.camera.position);
     // Thirteen engines: less bloom, so the big flame keeps its colour instead of going white.

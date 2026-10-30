@@ -53,6 +53,11 @@ const WASH_AT_CUTOFF = 0.8;
 const WASH_DECAY = 6;
 /** The target ring geometry has this radius; it is scaled to the hull radius + pin window. */
 const RING_UNIT = 6;
+/** Hull sky-reflection strength in flight, and once held in the arms (after cutoff). */
+export const HULL_ENV = 0.95;
+export const HULL_ENV_HELD = 0.6;
+/** CSS px: the smallest the ring may look on screen (far lenses grow it to this). */
+const RING_MIN_PX = 24;
 /** Ring tint per tolerance: in the window, near its edge, outside it. */
 const RING_TONE: Record<FrameState['aids']['tone'], string> = { ok: '#5fffd0', warn: '#ffd25e', bad: '#ff8a7a' };
 
@@ -194,6 +199,8 @@ export class WorldScene {
   private readonly levels = new Float32Array(ENGINE_COUNT);
   private prevLit = 0;
   private flashAt = -1e9;
+  /** The ring's world scale this frame (before the per-camera minimum size). */
+  private ringScale = 1;
   private lastSimT = -1e9;
   private lastT = -1;
   private wash = 0;
@@ -268,7 +275,7 @@ export class WorldScene {
       emissive: PLUME_COLOR.clone(),
       emissiveMap: tex.glow,
       emissiveIntensity: 0,
-      envMapIntensity: 0.95,
+      envMapIntensity: HULL_ENV,
     });
     const hull = new THREE.Mesh(new THREE.CylinderGeometry(R, R, BOOSTER_LENGTH, 96, 1, true), this.hullMat);
     hull.position.y = BOOSTER_LENGTH / 2 - COM_ABOVE_BASE;
@@ -955,6 +962,19 @@ export class WorldScene {
   }
 
   /**
+   * On a far lens the target ring is a few pixels wide: grow it (for this camera only) to at
+   * least RING_MIN_PX across on screen. Call after the camera has moved, before rendering.
+   */
+  fitRingToCamera(cam: THREE.PerspectiveCamera, heightPx: number): void {
+    if (!this.ring.visible) return;
+    const r = this.ringScale * RING_UNIT;
+    const d = Math.max(1, cam.position.distanceTo(this.ring.position));
+    const px = ((r / (d * Math.tan((cam.fov * Math.PI) / 360))) * heightPx) / 2; // radius in px
+    const k = px > 1e-6 && 2 * px < RING_MIN_PX ? RING_MIN_PX / (2 * px) : 1;
+    this.ring.scale.setScalar(this.ringScale * k);
+  }
+
+  /**
    * Trims the plume for a lens that sits close to it (the tower top): the nozzle glow
    * sprite and the shells would otherwise fill the frame with a white bloom blob. Keeps
    * the hot core and the diamonds. Returns 0 (far) .. 1 (very near) for the bloom/flare.
@@ -1089,6 +1109,9 @@ export class WorldScene {
     // The plume's warm light climbs the lower hull (stronger close to the ground bounce).
     const bounce = 1 + 0.6 * Math.max(0, 1 - alt / 160);
     this.hullMat.emissiveIntensity = anyLit ? (0.5 + 1.1 * heat) * (1 + this.flash) * bounce : 0;
+    // Held in the arms (engines off, frost and vapour on the tanks): a duller sky reflection,
+    // so the hull reads mid-grey at the catch, not as a white column.
+    this.hullMat.envMapIntensity = f.vent > 0 ? HULL_ENV_HELD : HULL_ENV;
 
     // Hero (menu): the low sun a little warmer and stronger, for a clear rim on the steel.
     this.sun.intensity = f.hero ? 4.2 : 3.4;
@@ -1222,7 +1245,8 @@ export class WorldScene {
     if (this.wash > 0.01) {
       const count = Math.floor(this.particleCount * Math.min(1, this.wash * 1.6) * motion);
       const w = this.washWater;
-      const tint: [number, number, number] = [0.95 * w + 0.86 * (1 - w), 0.96 * w + 0.74 * (1 - w), 0.98 * w + 0.58 * (1 - w)];
+      // Over land: grey-white steam with a little dust (the pad's water deluge), not beige.
+      const tint: [number, number, number] = [0.95 * w + 0.82 * (1 - w), 0.96 * w + 0.79 * (1 - w), 0.98 * w + 0.74 * (1 - w)];
       const big = lit > 3 || lit === 0 ? 1 : 0.75;
       emit(count, this.washAt.x, this.washAt.y, this.washAt.z, 190 * big, 46, 16, 0.55 * Math.min(1, this.wash * 1.3), tint, 0.16, 0);
     }
@@ -1263,7 +1287,8 @@ export class WorldScene {
     if (a.ring) {
       // CATCH pressed: the ring flashes white-hot and swells, then settles back.
       const fl = Math.min(1, Math.max(0, a.flash));
-      this.ring.scale.setScalar((a.ringRadius / RING_UNIT) * (1 + (f.reducedMotion ? 0.08 : 0.3) * fl));
+      this.ringScale = (a.ringRadius / RING_UNIT) * (1 + (f.reducedMotion ? 0.08 : 0.3) * fl);
+      this.ring.scale.setScalar(this.ringScale);
       const pulse = f.reducedMotion ? 0.85 : 0.7 + 0.25 * Math.sin(f.t * 4);
       const rm = this.ring.material as THREE.MeshBasicMaterial;
       rm.opacity = Math.min(1, pulse + fl);

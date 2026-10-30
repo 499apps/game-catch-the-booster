@@ -151,6 +151,24 @@ describe('Cadet: the divert swings in by itself; the stick moves its aim point',
     }
   });
 
+  it('one key of a diagonal arrow still brings the aim in (radial projection); the opposite key does nothing', () => {
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const w = createWorld(seed, 'cadet');
+      while (!w.flags.divert && !w.done) stepWorld(w, commandFor(w, NEUTRAL_INPUT, false));
+      const a0 = Math.hypot(w.aim.x, w.aim.z);
+      // The single axis that points most at the centre (the key a child presses first).
+      const alongX = Math.abs(w.aim.x) >= Math.abs(w.aim.z);
+      const key = alongX ? { stickX: -Math.sign(w.aim.x), stickZ: 0 } : { stickX: 0, stickZ: -Math.sign(w.aim.z) };
+      const wrong = { stickX: -key.stickX, stickZ: -key.stickZ };
+      const v = structuredClone(w);
+      for (let i = 0; i < 60; i++) stepWorld(v, commandFor(v, { ...NEUTRAL_INPUT, ...wrong }, false));
+      expect(Math.hypot(v.aim.x, v.aim.z), `seed ${seed} wrong key`).toBeCloseTo(a0, 9);
+      for (let i = 0; i < 60; i++) stepWorld(w, commandFor(w, { ...NEUTRAL_INPUT, ...key }, false));
+      // 0.5 s at 1 m/s, at least cos 45 deg of it toward the centre (or all the way in).
+      expect(Math.hypot(w.aim.x, w.aim.z), `seed ${seed} one key`).toBeLessThan(Math.max(0, a0 - 0.3) + 1e-6);
+    }
+  });
+
   it('the stick only ever brings the aim closer to the ring centre', () => {
     const w = createWorld(2, 'cadet');
     let last = Infinity;

@@ -63,6 +63,10 @@ export interface HudData {
   lightArmed: boolean;
   /** Cadet: the big "steer onto the ring" arrow. */
   steerCue: boolean;
+  /** Cadet: the stick is pushed but the aim does not move: pulse the arrow, "Other way". */
+  wrongWay: boolean;
+  /** Pilot / FD: propellant 0..1 for the short PROP chip (compact phone strip); null hides it. */
+  propChip: number | null;
   /** Cadet: the board folds into one GO chip. */
   foldBoard: boolean;
 }
@@ -155,6 +159,7 @@ export class Hud {
   private readonly pinArrow = svgEl('g', {});
   private readonly pinText = el('span');
   private readonly tiltChip = el('span', { class: 'chip tol', 'data-testid': 'hud-tilt' });
+  private readonly propChip = el('span', { class: 'chip tol prop-chip', 'data-testid': 'hud-prop-chip' });
   private readonly vsChip = el('span', { class: 'chip tol vs' }, [this.vs]);
   private readonly vsGlyph = el('span', { class: 'g' });
   // The 3-2-1 ignition cue (every tier) and the Cadet steer arrow.
@@ -220,7 +225,7 @@ export class Hud {
     pinSvg.append(this.pinArrow);
     this.pinChip.append(el('span', { class: 'k', text: 'PIN' }), pinSvg, this.pinText);
     this.vsChip.append(el('span', { class: 'vs-unit', text: 'm/s' }), this.vsGlyph);
-    const tol = el('span', { class: 'cell tolerances' }, [this.pinChip, this.tiltChip]);
+    const tol = el('span', { class: 'cell tolerances' }, [this.pinChip, this.tiltChip, this.propChip]);
 
     const telemetry = el('div', { id: 'telemetry', 'data-testid': 'telemetry' }, [
       el('span', { class: 'brand' }, [el('b', { text: 'HB-07' }), this.mission]),
@@ -243,6 +248,8 @@ export class Hud {
     this.steerArrow.append(svgEl('path', { d: 'M-11 0 H9 M2 -7 L10 0 L2 7', class: 'arrow' }));
     steerSvg.append(this.steerArrow);
     this.steer.append(steerSvg, this.steerText);
+    // Docked to the strip (above it on desktop, under it on phones): never over the tower top.
+    telemetry.append(this.steer);
     this.pip.append(this.pipLabel);
     this.pip.hidden = true;
     this.captions.append(el('span', { class: 'radio', 'aria-hidden': 'true', text: '◉' }), this.captionText);
@@ -268,7 +275,6 @@ export class Hud {
       this.lightBtn,
       this.stepBtn,
       this.cue,
-      this.steer,
     ]);
     parent.append(this.root);
 
@@ -430,9 +436,21 @@ export class Hud {
       const ang = (Math.atan2(d.pin.sz, d.pin.sx) * 180) / Math.PI;
       this.steerArrow.setAttribute('transform', `rotate(${ang.toFixed(0)})`);
       this.steerArrow.style.opacity = on ? '0' : '1';
-      setText(this.steerText, on ? 'On the ring ✓' : `Steer onto the ring · ${fmt(d.pin.dist, 1)} m`);
-      const cls = on ? 'ok' : '';
+      // A push that does not move the aim (it points away from the ring): say so.
+      const wrong = d.wrongWay && !on;
+      setText(
+        this.steerText,
+        on ? 'On the ring ✓' : wrong ? `Other way ↺ · push along the arrow · ${fmt(d.pin.dist, 1)} m` : `Steer onto the ring · ${fmt(d.pin.dist, 1)} m`,
+      );
+      const cls = on ? 'ok' : wrong ? 'wrong' : '';
       if (this.steer.className !== cls) this.steer.className = cls;
+    }
+    // Compact phone strip: a short PROP chip in Pilot and Flight Director.
+    show(this.propChip, d.propChip !== null);
+    if (d.propChip !== null) {
+      setText(this.propChip, `PROP ${fmt(d.propChip * 100)}%`);
+      const low = d.propChip < 0.15;
+      if (this.propChip.classList.contains('warn') !== low) this.propChip.classList.toggle('warn', low);
     }
 
     // The 3-2-1 ignition cue, every tier.

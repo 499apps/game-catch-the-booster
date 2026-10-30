@@ -667,6 +667,14 @@ function makeLiveryCanvas(): HTMLCanvasElement {
   return c;
 }
 
+/**
+ * Hull sheet tone (0-255 canvas values): albedo, and the roughness range (the G channel of
+ * the roughness-metalness map; metalness is 1). The stainless used to be 192 albedo and
+ * 0.25-0.34 roughness: a near-mirror that showed the bright dusk sky as a white column in the
+ * low sun. Darker and rougher reads as the mid-grey of the real hull at the catch.
+ */
+export const HULL_TONE = { albedo: 152, roughMin: 108, roughSpan: 30 } as const;
+
 /** Brushed stainless with weld rings, staggered vertical seams, soot, frost and the livery. */
 export function makeHullTextures(): HullTextures {
   const W = 512;
@@ -698,10 +706,10 @@ export function makeHullTextures(): HullTextures {
   for (let k = 0; k < rings; k++) {
     const y0 = rowOf(Math.min(L, (k + 1) * ringH));
     const y1 = rowOf(k * ringH);
-    const t = 192 + Math.round((rnd() - 0.5) * 16);
+    const t = HULL_TONE.albedo + Math.round((rnd() - 0.5) * 16);
     cx.fillStyle = `rgb(${t},${t + 2},${t + 5})`;
     cx.fillRect(0, y0, W, y1 - y0 + 1);
-    const r = 64 + Math.round(rnd() * 22);
+    const r = HULL_TONE.roughMin + Math.round(rnd() * HULL_TONE.roughSpan);
     rx.fillStyle = `rgb(0,${r},255)`;
     rx.fillRect(0, y0, W, y1 - y0 + 1);
   }
@@ -710,10 +718,10 @@ export function makeHullTextures(): HullTextures {
     const y = rnd() * H;
     const x = rnd() * W;
     const len = W * (0.08 + rnd() * 0.5);
-    const g = 150 + Math.floor(rnd() * 100);
+    const g = HULL_TONE.albedo - 25 + Math.floor(rnd() * 70);
     cx.fillStyle = `rgba(${g},${g + 2},${g + 5},${(0.06 + rnd() * 0.12).toFixed(3)})`;
     wrapRect(cx, x, y, len, 0.7 + rnd() * 0.8);
-    const rr = 50 + Math.floor(rnd() * 50);
+    const rr = HULL_TONE.roughMin - 10 + Math.floor(rnd() * HULL_TONE.roughSpan);
     rx.fillStyle = `rgba(0,${rr},255,0.25)`;
     wrapRect(rx, x, y, len, 1);
     const v = (rnd() - 0.5) * 0.08;

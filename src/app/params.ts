@@ -15,7 +15,7 @@ export interface Hooks {
   at: number | null;
   /** Still mode: show the debrief of a finished autopilot run. */
   debrief: boolean;
-  /** Show the fps counter. */
+  /** Show the fps counter (`fps=1` only; the test state still reports the fps). */
   fps: boolean;
   /** Force a quality setting (tests use Low on software-rendered browsers). */
   quality: QualitySetting | null;
@@ -30,6 +30,8 @@ export interface Hooks {
   manual: boolean;
   /** Still mode with `manual`: the stick (world x, -1..1) held from the divert start. */
   stick: number;
+  /** Still mode with `manual`: `stick=arrow` holds full stick along the HUD steer arrow. */
+  stickArrow: boolean;
 }
 
 const QUALITY_IDS: readonly string[] = ['auto', 'low', 'medium', 'high'];
@@ -58,11 +60,13 @@ export function parseHooks(search: string): Hooks {
     tier: tierRaw && TIER_IDS.includes(tierRaw) ? (tierRaw as TierId) : null,
     at: num(p.get('at')),
     debrief: p.get('debrief') === '1',
-    fps: p.get('fps') === '1' || active,
+    // Only on request: test runs and captures must look like what a player sees.
+    fps: p.get('fps') === '1',
     quality: q && QUALITY_IDS.includes(q) ? (q as QualitySetting) : null,
     scale: Math.min(Math.max(num(p.get('scale')) ?? 1, 0.25), 1),
     tutorial: p.get('tutorial') === '1',
     manual: p.get('manual') === '1',
     stick: Math.min(Math.max(num(p.get('stick')) ?? 0, -1), 1),
+    stickArrow: p.get('stick') === 'arrow',
   };
 }

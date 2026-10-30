@@ -688,12 +688,13 @@ summary:focus-visible {
   color: var(--warn);
   font-size: 44px;
 }
-/* Cadet: the steer arrow toward the ring (screen space). */
+/* Cadet: the steer arrow toward the ring (screen space). Docked to the strip: just above it
+   on desktop (strip at the bottom), just under it on touch screens (strip at the top), so it
+   never covers the tower top or the booster. */
 #steer-cue {
   position: absolute;
-  left: 50%;
-  top: 56%;
-  transform: translateX(-50%);
+  left: 0;
+  bottom: calc(100% + 8px);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -709,6 +710,34 @@ summary:focus-visible {
 #steer-cue.ok {
   border-color: var(--go);
   color: var(--go);
+}
+.touch #steer-cue {
+  bottom: auto;
+  top: calc(100% + 8px);
+}
+/* A push that does not move the aim: the arrow pulses (a gentle glow with reduced motion). */
+#steer-cue.wrong {
+  border-color: #fff;
+  color: #fff;
+}
+#steer-cue.wrong .steer-dial {
+  animation: wrong-way 0.5s ease-in-out infinite alternate;
+}
+.reduced #steer-cue.wrong .steer-dial {
+  animation: none;
+  filter: drop-shadow(0 0 6px #fff);
+}
+@keyframes wrong-way {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.25);
+  }
+}
+/* The short PROP chip is for the compact phone strip only (desktop has the PROP cell). */
+#telemetry .prop-chip {
+  display: none;
 }
 .steer-dial {
   width: 46px;
@@ -1215,9 +1244,12 @@ summary:focus-visible {
   background: rgba(255, 255, 255, 0.06);
   font-size: 15px;
 }
-.tutorial #telemetry,
-.tutorial #captions {
+.tutorial #telemetry {
   opacity: 0.35;
+}
+/* The tutorial card is the only text: no radio captions stack under it. */
+.tutorial #captions {
+  display: none;
 }
 
 /* ---------- Replay ---------- */
@@ -1297,12 +1329,15 @@ summary:focus-visible {
 }
 /* In a replay the strip moves to the top-left: the camera tag ("REPLAY · SYNCED CAMS") goes
    just above the replay bar, so the strip's brand never covers it. */
+/* At the right, so it never covers the bottom-left split label (DRONE CHASE). */
 .replaying #camera-tag,
 .touch.replaying #camera-tag {
   top: auto;
-  left: calc(var(--sl) + 76px);
+  left: auto;
+  right: calc(var(--sr) + 16px);
   transform: none;
   bottom: calc(var(--sb) + 76px);
+  white-space: nowrap;
   z-index: 31;
 }
 #split-labels {
@@ -1331,10 +1366,13 @@ summary:focus-visible {
   #split-labels span:nth-child(n + 3) {
     margin-bottom: calc(var(--sb) + 150px);
   }
+  /* Phones: the replay bar wraps to 2-3 rows, so the tag goes to the top, under the strip. */
   .replaying #camera-tag,
   .touch.replaying #camera-tag {
     left: calc(var(--sl) + 12px);
-    bottom: calc(var(--sb) + 124px);
+    right: auto;
+    bottom: auto;
+    top: calc(var(--st) + 128px);
   }
 }
 
@@ -1449,11 +1487,17 @@ summary:focus-visible {
   top: auto;
   bottom: calc(var(--sb) + 300px);
 }
+/* Touch: one line, between the joystick (left) and the throttle (right). */
 .touch #camera-tag {
   top: auto;
   bottom: calc(var(--sb) + 8px);
-  left: 50%;
-  transform: translateX(-50%);
+  left: calc(var(--sl) + 186px);
+  right: calc(var(--sr) + 84px);
+  transform: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
 }
 /* Phones: SLOW-MO sits under the strip, top left, clear of the CATCH button and the thumbs. */
 .touch #slowmo {
@@ -1468,11 +1512,12 @@ summary:focus-visible {
 .touch #catch-btn {
   bottom: calc(var(--sb) + 28px);
 }
+/* Touch: LIGHT and its 3-2-1 cue sit above the joystick, not on it. */
 .touch #light-btn {
-  bottom: calc(var(--sb) + 40px);
+  bottom: calc(var(--sb) + 196px);
 }
 .touch #ign-cue {
-  bottom: calc(var(--sb) + 112px);
+  bottom: calc(var(--sb) + 262px);
 }
 .touch #step-btn {
   bottom: calc(var(--sb) + 180px);
@@ -1486,9 +1531,30 @@ summary:focus-visible {
   left: calc(var(--sl) + 12px);
   right: auto;
 }
+/* Touch: the tutorial card docks under the strip (and under the steer arrow), as a small
+   card, so the practice booster, the arrow and the ring stay in view. */
 .touch #tutorial {
-  top: auto;
-  bottom: calc(var(--sb) + 210px);
+  top: calc(var(--st) + 172px);
+  bottom: auto;
+}
+.touch #tutorial[data-step='steer'] {
+  width: min(92vw, 340px);
+  padding: 6px 12px 8px;
+}
+.touch #tutorial[data-step='steer'] .dots {
+  display: none;
+}
+.touch #tutorial[data-step='steer'] .title {
+  font-size: 15px;
+  margin: 0 0 2px;
+}
+.touch #tutorial[data-step='steer'] .how {
+  font-size: 14px;
+  line-height: 1.3;
+}
+.touch #tutorial[data-step='steer'] .skip {
+  min-height: 36px;
+  font-size: 14px;
 }
 
 /* ---------- Notices ---------- */
@@ -1555,8 +1621,19 @@ summary:focus-visible {
   #telemetry .cell {
     min-width: max-content;
   }
+  /* Row 2 wraps its chips (PIN, TILT, PROP) instead of widening the grid past the screen. */
   #telemetry .tolerances {
     flex-wrap: wrap;
+    min-width: 0;
+  }
+  #telemetry .prop-chip:not([hidden]) {
+    display: inline-flex;
+  }
+  #steer-cue {
+    font-size: 14px;
+    white-space: normal;
+    max-width: 100%;
+    box-sizing: border-box;
   }
   #telemetry .brand,
   #telemetry .c-speed,
