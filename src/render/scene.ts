@@ -18,7 +18,7 @@ import {
 import { armAngle } from '../sim/tower';
 import { axisFromTilt, type Vec3 } from '../sim/vec';
 import type { EngineState } from '../sim/types';
-import { WIDE_CAM } from './cameras';
+import { TOWER_TOP_LAYER, WIDE_CAM } from './cameras';
 import {
   FOG_COLOR,
   FOG_DENSITY,
@@ -302,11 +302,17 @@ export class WorldScene {
       det.push(new THREE.CylinderGeometry(0.55, 0.55, 2.6, 14).rotateX(Math.PI / 2).translate(0, PIN_ABOVE_COM, sz * (R + 1.0)));
       det.push(new THREE.BoxGeometry(1.6, 2.2, 0.6).translate(0, PIN_ABOVE_COM + 0.2, sz * (R + 0.2)));
     }
+    // Chines and the cable raceway: low, rounded and close to the hull tone. Bright, sharp
+    // boxes here read as a stray light line down the hull from the tower-top camera.
+    const strakes: THREE.BufferGeometry[] = [];
     for (const a of [0.6, Math.PI + 0.6]) {
-      const g = new THREE.BoxGeometry(0.55, 54, 0.45).translate(R + 0.12, BASE_Y + 9 + 27, 0);
-      det.push(g.rotateY(-a));
+      const g = new THREE.CylinderGeometry(0.22, 0.22, 54, 6, 1).scale(1, 1, 0.8).translate(R + 0.05, BASE_Y + 9 + 27, 0);
+      strakes.push(g.rotateY(-a));
     }
-    det.push(new THREE.BoxGeometry(0.4, 58, 0.7).translate(R + 0.2, BASE_Y + 8 + 29, 0).rotateY(-2.2));
+    strakes.push(new THREE.CylinderGeometry(0.28, 0.28, 58, 6, 1).scale(0.7, 1, 1.2).translate(R + 0.08, BASE_Y + 8 + 29, 0).rotateY(-2.2));
+    const strakeMat = new THREE.MeshStandardMaterial({ color: '#8e9196', metalness: 0.75, roughness: 0.62, envMapIntensity: 0.6 });
+    const strakeMesh = new THREE.Mesh(merge(strakes), strakeMat);
+    this.booster.add(strakeMesh);
     for (const a of this.finAngles) {
       det.push(new THREE.BoxGeometry(0.8, 1.6, 1.4).translate(R + 0.35, TOP_Y - 3.5, 0).rotateY(-a));
     }
@@ -526,9 +532,14 @@ export class WorldScene {
   /** Spectators: on the dunes in front of the wide cam and on the beach down the coast. */
   private buildCrowd(): void {
     const n = 300;
-    const geo = new THREE.CapsuleGeometry(0.24, 1.1, 2, 6).translate(0, 0.8, 0);
-    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 }), n);
-    const tones = ['#2b2f3a', '#3c2f2a', '#4a4f5c', '#5c3b33', '#1f2a2f', '#6b5d4a', '#7a3d3d', '#2f4a5a'];
+    // A person-like silhouette (tapered body, shoulders, head), small and dark against
+    // the dusk glow. Sizes vary (adults, kids, people sitting on the sand).
+    const body = new THREE.CylinderGeometry(0.17, 0.12, 0.95, 5).translate(0, 0.48, 0);
+    const shoulders = new THREE.CylinderGeometry(0.2, 0.17, 0.22, 5).translate(0, 1.0, 0);
+    const head = new THREE.SphereGeometry(0.11, 6, 4).translate(0, 1.24, 0);
+    const geo = merge([body, shoulders, head]);
+    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, metalness: 0 }), n);
+    const tones = ['#1d2129', '#2a221f', '#30343d', '#3a2824', '#172024', '#3d372e', '#432a2a', '#223340', '#4a4436', '#2c2b3a'];
     let s = 1;
     const rnd = (): number => {
       s = (s * 16807) % 2147483647;
@@ -549,12 +560,16 @@ export class WorldScene {
         x = WATERLINE_X - 6 - rnd() * 24;
         z = -1560 + rnd() * 70;
       }
-      const h = 0.75 + rnd() * 0.35;
+      const kind = rnd();
+      // ~20% sitting, ~20% kids, the rest adults of varied height and build.
+      const h = kind < 0.2 ? 0.5 + rnd() * 0.1 : kind < 0.4 ? 0.7 + rnd() * 0.15 : 1.0 + rnd() * 0.3;
+      const wdt = 0.85 + rnd() * 0.4;
       q.setFromAxisAngle(UP, rnd() * 6.28);
-      sc.set(1, h, 1);
-      m.compose(new THREE.Vector3(x, terrainHeight(x, z), z), q, sc);
+      sc.set(wdt, h, wdt * (0.8 + rnd() * 0.3));
+      m.compose(new THREE.Vector3(x, terrainHeight(x, z) - 0.05, z), q, sc);
       mesh.setMatrixAt(i, m);
-      mesh.setColorAt(i, new THREE.Color(tones[i % tones.length] ?? '#333'));
+      const tone = tones[Math.floor(rnd() * tones.length)] ?? '#2a2a2a';
+      mesh.setColorAt(i, new THREE.Color(tone).multiplyScalar(0.75 + rnd() * 0.35));
     }
     this.scene.add(mesh);
   }
@@ -573,10 +588,17 @@ export class WorldScene {
     ] as const) {
       stat.push(new THREE.BoxGeometry(1.5, TOWER_HEIGHT, 1.5).translate(TOWER_X + dx * half, TOWER_HEIGHT / 2, dz * half));
     }
-    // Top deck, crane housing and mast.
-    stat.push(new THREE.BoxGeometry(TOWER_W + 3, 1.6, TOWER_W + 3).translate(TOWER_X, TOWER_HEIGHT, 0));
-    stat.push(new THREE.BoxGeometry(7, 5, 9).translate(TOWER_X - 1.5, TOWER_HEIGHT + 3.3, 0));
-    stat.push(new THREE.CylinderGeometry(0.35, 0.6, 16, 8).translate(TOWER_X + 2, TOWER_HEIGHT + 8, 3));
+    // Top deck, crane housing and mast: their own mesh on TOWER_TOP_LAYER, so the
+    // tower-top lens (mounted on this structure) never sees them fill its frame.
+    const topParts = [
+      new THREE.BoxGeometry(TOWER_W + 3, 1.6, TOWER_W + 3).translate(TOWER_X, TOWER_HEIGHT, 0),
+      new THREE.BoxGeometry(7, 5, 9).translate(TOWER_X - 1.5, TOWER_HEIGHT + 3.3, 0),
+      new THREE.CylinderGeometry(0.35, 0.6, 16, 8).translate(TOWER_X + 2, TOWER_HEIGHT + 8, 3),
+    ];
+    const topMesh = new THREE.Mesh(merge(topParts), steel);
+    topMesh.layers.set(TOWER_TOP_LAYER);
+    topMesh.receiveShadow = true;
+    s.add(topMesh);
     // Carriage guide rails on the sea face and the carriage itself.
     for (const z of [-4.2, 4.2]) stat.push(new THREE.BoxGeometry(0.9, TOWER_HEIGHT - 6, 0.9).translate(TOWER_FACE_X + 0.6, (TOWER_HEIGHT - 6) / 2 + 3, z));
     stat.push(new THREE.BoxGeometry(3.6, 16, 13).translate(TOWER_FACE_X + 2, RAIL_Y - 6, 0));

@@ -62,27 +62,184 @@ export const emptyIntent = (): RawIntent => ({
   noGo: false,
 });
 
+// ---------------------------------------------------------------- remappable keys
+
+export type KeyAction =
+  | 'tiltLeft'
+  | 'tiltRight'
+  | 'tiltFwd'
+  | 'tiltBack'
+  | 'rollLeft'
+  | 'rollRight'
+  | 'throttleUp'
+  | 'throttleDown'
+  | 'ignite'
+  | 'stepDown'
+  | 'catch'
+  | 'go'
+  | 'divert';
+
+export const KEY_ACTIONS: readonly KeyAction[] = [
+  'tiltLeft',
+  'tiltRight',
+  'tiltFwd',
+  'tiltBack',
+  'rollLeft',
+  'rollRight',
+  'throttleUp',
+  'throttleDown',
+  'ignite',
+  'stepDown',
+  'catch',
+  'go',
+  'divert',
+];
+
+export const KEY_ACTION_LABELS: Record<KeyAction, string> = {
+  tiltLeft: 'Tilt left',
+  tiltRight: 'Tilt right',
+  tiltFwd: 'Tilt forward',
+  tiltBack: 'Tilt back',
+  rollLeft: 'Roll left (FD)',
+  rollRight: 'Roll right (FD)',
+  throttleUp: 'Throttle up',
+  throttleDown: 'Throttle down',
+  ignite: 'Light engines',
+  stepDown: 'Step down 13 → 3',
+  catch: 'CATCH (close arms)',
+  go: 'GO for catch',
+  divert: 'Divert (hold 1 s)',
+};
+
+/** Each action has one or more KeyboardEvent.code values. */
+export type KeyMap = Record<KeyAction, string[]>;
+
+export type KeyPreset = 'standard' | 'onehand';
+
+/** Design section 5: WASD tilt, Shift/Ctrl throttle, Q/E roll, R step down, Space arms, Enter GO, X divert. */
+export const STANDARD_KEYS: Readonly<KeyMap> = Object.freeze({
+  tiltLeft: ['KeyA', 'ArrowLeft'],
+  tiltRight: ['KeyD', 'ArrowRight'],
+  tiltFwd: ['KeyW', 'ArrowUp'],
+  tiltBack: ['KeyS', 'ArrowDown'],
+  rollLeft: ['KeyQ'],
+  rollRight: ['KeyE'],
+  throttleUp: ['ShiftLeft', 'ShiftRight'],
+  throttleDown: ['ControlLeft', 'ControlRight'],
+  ignite: ['Enter', 'KeyI'],
+  stepDown: ['KeyR'],
+  catch: ['Space'],
+  go: ['Enter'],
+  divert: ['KeyX'],
+});
+
+/** One hand on the left of the keyboard: everything within reach of WASD. */
+export const ONEHAND_KEYS: Readonly<KeyMap> = Object.freeze({
+  tiltLeft: ['KeyA'],
+  tiltRight: ['KeyD'],
+  tiltFwd: ['KeyW'],
+  tiltBack: ['KeyS'],
+  rollLeft: ['KeyZ'],
+  rollRight: ['KeyG'],
+  throttleUp: ['KeyE'],
+  throttleDown: ['KeyQ'],
+  ignite: ['KeyF'],
+  stepDown: ['KeyR'],
+  catch: ['Space'],
+  go: ['KeyF'],
+  divert: ['KeyX'],
+});
+
+export function presetKeys(p: KeyPreset): KeyMap {
+  const src = p === 'onehand' ? ONEHAND_KEYS : STANDARD_KEYS;
+  const out = {} as KeyMap;
+  for (const a of KEY_ACTIONS) out[a] = [...src[a]];
+  return out;
+}
+
+/** Keys with a fixed meaning (menus, cameras, mute, throttle digits): never rebindable. */
+export function isReservedKey(code: string): boolean {
+  return (
+    code === 'Escape' ||
+    code === 'KeyP' ||
+    code === 'KeyC' ||
+    code === 'KeyV' ||
+    code === 'KeyM' ||
+    code === 'Tab' ||
+    /^Digit[0-9]$/.test(code) ||
+    /^Numpad/.test(code) ||
+    /^(Meta|OS|Alt)/.test(code)
+  );
+}
+
+const CODE_RE = /^[A-Za-z0-9]{1,24}$/;
+
+/** Validates a stored key map; unknown or broken entries fall back to the standard keys. */
+export function sanitizeKeyMap(raw: unknown): KeyMap {
+  const out = presetKeys('standard');
+  if (!raw || typeof raw !== 'object') return out;
+  const r = raw as Record<string, unknown>;
+  for (const a of KEY_ACTIONS) {
+    const v = r[a];
+    if (!Array.isArray(v)) continue;
+    const codes = v.filter((c): c is string => typeof c === 'string' && CODE_RE.test(c) && !isReservedKey(c)).slice(0, 3);
+    if (codes.length) out[a] = codes;
+  }
+  return out;
+}
+
 /**
- * Keyboard (design section 5): WASD tilt, Shift/Ctrl throttle, 1-9 throttle set,
- * Q/E roll, R step down, Space close arms, Enter GO / ignite, X held 1 s = No-Go.
- * `held` is the set of KeyboardEvent.code values down now; `xHeldFor` is seconds X has been held.
+ * Binds `code` as the only key of `action`. Other actions lose that key (no conflicts),
+ * except GO / ignite, which may share a key. Reserved keys return the map unchanged.
  */
-export function mapKeyboard(held: ReadonlySet<string>, xHeldFor = 0): RawIntent {
+export function rebind(km: KeyMap, action: KeyAction, code: string): KeyMap {
+  if (isReservedKey(code) || !CODE_RE.test(code)) return km;
+  const shareable = (a: KeyAction): boolean =>
+    (action === 'go' && a === 'ignite') || (action === 'ignite' && a === 'go');
+  const out = {} as KeyMap;
+  for (const a of KEY_ACTIONS) {
+    if (a === action) out[a] = [code];
+    else out[a] = shareable(a) ? [...km[a]] : km[a].filter((c) => c !== code);
+  }
+  return out;
+}
+
+/** "KeyA" -> "A", "ArrowLeft" -> "←", "ShiftLeft" -> "Shift". */
+export function keyLabel(code: string): string {
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  const arrows: Record<string, string> = { ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓' };
+  const arrow = arrows[code];
+  if (arrow) return arrow;
+  return code.replace(/(Left|Right)$/, '');
+}
+
+const anyHeld = (held: ReadonlySet<string>, codes: readonly string[]): boolean => codes.some((c) => held.has(c));
+
+/**
+ * Keyboard (design section 5), through a remappable key map. Digits 1-9 always set
+ * the throttle lever. `held` is the set of KeyboardEvent.code values down now;
+ * `divertHeldFor` is how long a divert key has been held.
+ */
+export function mapKeyboard(held: ReadonlySet<string>, divertHeldFor = 0, km: Readonly<KeyMap> = STANDARD_KEYS): RawIntent {
   const i = emptyIntent();
-  const k = (c: string): number => (held.has(c) ? 1 : 0);
-  i.stickX = k('KeyD') - k('KeyA');
-  i.stickZ = k('KeyS') - k('KeyW');
-  i.yaw = k('KeyE') - k('KeyQ');
-  const up = held.has('ShiftLeft') || held.has('ShiftRight');
-  const down = held.has('ControlLeft') || held.has('ControlRight');
-  i.throttleRate = (up ? KEY_THROTTLE_RATE : 0) - (down ? KEY_THROTTLE_RATE : 0);
+  const k = (a: KeyAction): number => (anyHeld(held, km[a]) ? 1 : 0);
+  i.stickX = k('tiltRight') - k('tiltLeft');
+  i.stickZ = k('tiltBack') - k('tiltFwd');
+  i.yaw = k('rollRight') - k('rollLeft');
+  i.throttleRate = (k('throttleUp') - k('throttleDown')) * KEY_THROTTLE_RATE;
   for (let d = 1; d <= 9; d++) if (held.has(`Digit${d}`)) i.throttleSet = (d - 1) / 8;
-  i.stepDown = held.has('KeyR');
-  i.closeArms = held.has('Space');
-  i.go = held.has('Enter');
-  i.ignite = held.has('Enter') || held.has('KeyI');
-  i.noGo = held.has('KeyX') && xHeldFor >= DIVERT_HOLD;
+  i.stepDown = k('stepDown') === 1;
+  i.closeArms = k('catch') === 1;
+  i.go = k('go') === 1;
+  i.ignite = k('ignite') === 1;
+  i.noGo = k('divert') === 1 && divertHeldFor >= DIVERT_HOLD;
   return i;
+}
+
+/** True when any divert key is held (devices time the hold). */
+export function divertHeld(held: ReadonlySet<string>, km: Readonly<KeyMap> = STANDARD_KEYS): boolean {
+  return anyHeld(held, km.divert);
 }
 
 /** Standard-mapping gamepad: axes [lx, ly, rx, ry]; buttons A0 B1 X2 Y3 LB4 RB5 LT6 RT7 ... */

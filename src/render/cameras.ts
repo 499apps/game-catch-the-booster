@@ -28,8 +28,16 @@ export const CAMERA_LABELS: Record<CameraId, string> = {
 export const BEACH_CAM: Vec3 = { x: SHORELINE_X - 14, y: terrainHeight(SHORELINE_X - 14, -1750) + 2.6, z: -1750 };
 /** Wide shot along the beach from behind the crowd, looking into the sunset glow. */
 export const WIDE_CAM: Vec3 = { x: WATERLINE_X - 18, y: terrainHeight(WATERLINE_X - 18, 2650) + 4.5, z: 2650 };
-/** Camera on the tower top, at the inland edge, looking out to sea over the arms. */
-export const TOWER_CAM: Vec3 = { x: TOWER_X - 4, y: TOWER_HEIGHT + 8, z: -14 };
+/**
+ * Camera on a boom off the tower top, looking out to sea over the arms. It sits clear
+ * of the deck, crane housing and mast (those are also hidden from this lens on
+ * TOWER_TOP_LAYER), so no tower steel fills the frame near the lens.
+ */
+export const TOWER_CAM: Vec3 = { x: TOWER_X + 2, y: TOWER_HEIGHT + 9, z: -24 };
+/** Render layer for the tower-top structure: every camera sees it except the tower-top lens. */
+export const TOWER_TOP_LAYER = 1;
+/** Main-menu hero shot: low on the beach, close to the Catcher, looking up at the caught booster. */
+export const HERO_CAM: Vec3 = { x: WATERLINE_X - 12, y: terrainHeight(WATERLINE_X - 12, 330) + 2.2, z: 330 };
 
 export interface ShotInput {
   com: Vec3;
@@ -37,6 +45,8 @@ export interface ShotInput {
   thrustFrac: number;
   t: number;
   reducedMotion: boolean;
+  /** Main menu: the wide rig takes the hero shot, framed right of the left rail. */
+  hero?: boolean;
 }
 
 const expK = (dt: number, tau: number): number => (tau <= 0 ? 1 : 1 - Math.exp(-dt / tau));
@@ -71,6 +81,7 @@ export class CameraRig {
     aspect: number,
   ) {
     this.camera = new THREE.PerspectiveCamera(50, aspect, 1, 32000);
+    if (id !== 'towerTop') this.camera.layers.enable(TOWER_TOP_LAYER);
   }
 
   /** Moves the rig. `snap` skips smoothing (still frames, cuts). */
@@ -150,6 +161,23 @@ export class CameraRig {
         break;
       }
       case 'wide': {
+        if (s.hero) {
+          // Low and close: the booster in the arms fills the frame, sunset sky behind.
+          wantPos.set(HERO_CAM.x, HERO_CAM.y, HERO_CAM.z);
+          const pts = [top, new THREE.Vector3(TOWER_X, TOWER_HEIGHT + 10, 0), new THREE.Vector3(TOWER_X, 18, 0), base];
+          wantTarget.set(TOWER_X * 0.4, (top.y + 18) / 2, 0);
+          fov = THREE.MathUtils.clamp(fovToFit(wantPos, wantTarget, pts, c.aspect, 1.12), 8, 60);
+          // Aim left of the subject so it sits right of centre, clear of the left rail.
+          if (c.aspect > 1) {
+            const fwd = wantTarget.clone().sub(wantPos).normalize();
+            const right = new THREE.Vector3().crossVectors(fwd, c.up).normalize();
+            const halfW = Math.tan(((fov / 2) * Math.PI) / 180) * wantPos.distanceTo(wantTarget) * c.aspect;
+            wantTarget.addScaledVector(right, -0.22 * halfW);
+          }
+          targetTau = 0.6;
+          fovTau = 0.9;
+          break;
+        }
         wantPos.set(WIDE_CAM.x, WIDE_CAM.y, WIDE_CAM.z);
         const pts = [top, plumeEnd, new THREE.Vector3(TOWER_X, TOWER_HEIGHT + 8, 0), new THREE.Vector3(TOWER_X, 0, 0)];
         wantTarget.set(0, 0, 0);
@@ -217,9 +245,10 @@ export class AutoDirector {
     this.since = -1e9;
   }
 
-  desired(phase: Phase, tau: number | null, armsClosing: boolean, tDone: number | null, t: number): CameraId {
+  desired(phase: Phase, tau: number | null, armsClosing: boolean, _tDone: number | null, _t: number): CameraId {
     if (phase === 'splashdown') return 'wide';
-    if (phase === 'caught' || phase === 'settling') return tDone !== null && t - tDone > 2 ? 'wide' : 'towerTop';
+    // The caught moment and the debrief: the beach long lens shows the booster held in the arms.
+    if (phase === 'caught' || phase === 'settling') return 'beach';
     if (tau === null) return 'beach'; // coast: the long lens finds the booster high over the sea
     if (armsClosing || tau >= 20) return 'towerTop';
     if (tau < 4) return 'beach'; // ignition on 13

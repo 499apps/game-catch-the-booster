@@ -196,6 +196,40 @@ export class View {
     this.drawCalls = this.renderer.info.render.calls;
   }
 
+  /**
+   * Replay split screen: four synced cameras in a 2x2 grid on one frame of the world.
+   * Direct renders (no post), so four views stay inside the frame budget.
+   */
+  renderSplit(frame: FrameState, cams: readonly CameraId[], shot: ShotInput, dt: number, snap: boolean): void {
+    const r = this.renderer;
+    r.info.reset();
+    this.world.update(frame);
+    this.renderer.toneMappingExposure = BASE_EXPOSURE / (1 + 0.25 * (frame.reducedMotion ? 0 : this.world.plumeLevel));
+    const hw = Math.floor(this.width / 2);
+    const hh = Math.floor(this.height / 2);
+    const gap = 1;
+    r.setRenderTarget(null);
+    r.setScissorTest(false);
+    r.setViewport(0, 0, this.width, this.height);
+    r.clear();
+    r.setScissorTest(true);
+    cams.slice(0, 4).forEach((id, i) => {
+      const x = (i % 2) * hw;
+      const y = i < 2 ? hh : 0; // first row on top
+      const w = hw - gap;
+      const h = hh - gap;
+      const rig = this.rigs[id];
+      if (Math.abs(rig.camera.aspect - w / h) > 1e-4) rig.setAspect(w / h);
+      rig.update(shot, dt, snap);
+      r.setViewport(x, y, w, h);
+      r.setScissor(x, y, w, h);
+      r.render(this.world.scene, rig.camera);
+    });
+    r.setScissorTest(false);
+    r.setViewport(0, 0, this.width, this.height);
+    this.drawCalls = r.info.render.calls;
+  }
+
   private renderPip(id: CameraId, rect: PipRect, shot: ShotInput, dt: number, snap: boolean): void {
     const r = this.renderer;
     const w = Math.round(rect.w);

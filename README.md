@@ -40,15 +40,19 @@ The first e2e run has no screenshot baselines. Make them once with `pnpm exec pl
 
 | Action | Keyboard | Gamepad | Touch |
 | --- | --- | --- | --- |
-| Tilt / translate | W A S D | Left stick | Left stick pad |
-| Throttle | Shift / Ctrl (hold), or 1-9 | RT / LT | Right slider |
+| Tilt / translate | W A S D or arrows | Left stick | Left stick pad |
+| Throttle | Shift / Ctrl (hold), or 1-9 | RT / LT | Right slider (not in Cadet) |
 | Roll (Flight Director) | Q / E | Right stick X | - |
-| Light the engines | Enter or I | X or Start | LIGHT button |
-| Step down 13 to 3 | R | RB | 13 → 3 button |
-| Close the arms | Space | A | CATCH button (hold 0.3 s) |
-| GO / NO-GO (Flight Director) | Enter / hold X for 1 s | Start / hold B | GO / hold NO-GO |
+| Light the engines | Enter or I | X or Start | LIGHT button (3-2-1 cue in Cadet) |
+| Step down 13 to 3 | R | RB | R · 13 → 3 chip |
+| Close the arms | Space | A | CATCH button: hold 0.3 s until the inner ring fills. The outer ring counts down to contact. |
+| GO / NO-GO (Flight Director) | Enter / hold X for 1 s | Start / hold B | GO / slide and hold DIVERT |
 | Camera | C (next), V (auto), Numpad 1–5 (pick; the digit row sets the throttle) | Y or D-pad | Cameras list in the menu |
+| Sound on / off | M | - | Settings in the menu |
 | Pause and menu | Esc or P | View / Back | ☰ button (left edge) |
+| Replay | Space or K play / pause, ← → seek 2 s, S split view, , . speed | - | Replay bar |
+
+Settings (left menu) has a one-handed key preset, key remapping, a one-handed touch layout, master volume, music, reduced motion and "Clear my data". Gamepad rumble follows the engine thrust. The first Cadet run starts with a 20-second tutorial (skippable; "Practice" in the menu runs it again).
 
 ## Test hooks
 
@@ -62,6 +66,8 @@ These URL parameters are for tests. They do no harm in production. `window.__cat
 | `?tier=cadet\|pilot\|fd` | Preselect a tier. |
 | `?still=1` | Draw one deterministic, paused frame (main menu). Add `&at=20` for an in-flight frame 20 s after ignition, or `&debrief=1` for the debrief. |
 | `?test=1` | Expose `window.__catch` only. |
+| `?tutorial=1` | Show the Cadet tutorial even with other hooks (hooks skip it by default). |
+| `?quality=low\|medium\|high\|auto`, `?scale=0.5` | Force a quality tier; render at a lower scale (tests on software GL). |
 
 ## Layout
 

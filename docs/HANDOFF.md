@@ -1,67 +1,115 @@
-# Handoff: C2 striking visuals and the broadcast presentation (pass 1)
+# Handoff: C3 game feel, UX, audio, debrief and replay
 
 I could not run any tools this turn. All code is unverified until the operator runs the steps below.
 
-## What changed
+## Operator notes from C2: what I fixed
 
-### Scene (`src/render/scene.ts`, `materials.ts`, new `terrain.ts`)
+| Note | Fix | Files |
+| --- | --- | --- |
+| iPhone 15: the chip row covers ALTITUDE, PROP and STOP | The Go/No-Go board is now a child of the telemetry strip. On touch screens it is a wrapped row inside the strip, under the readouts. On desktop it sits just above the strip. | `src/ui/hud.ts`, `src/ui/styles.css` |
+| Tower-top camera: a dark box fills the right half | The camera moved to a boom at (-14, 155, -24), 16 m clear of the tower steel. The deck, crane housing and mast are on their own render layer (`TOWER_TOP_LAYER`). Every camera sees that layer except the tower-top lens. | `src/render/cameras.ts`, `src/render/scene.ts` |
+| A light vertical line down the hull | The cause was the bright chine and raceway boxes (metal 0.9, light grey). They are now low, rounded strakes in a darker, rougher material close to the hull tone. | `src/render/scene.ts` |
+| After the catch the director stays on the tower top | The director ignored the end of the flight because the sim clock stops when the run is done. Now `settling` and `caught` always cut to the beach long lens. The debrief backdrop uses the same shot. | `src/render/cameras.ts` |
+| Spectators read as coloured capsules | They are now small, dark person silhouettes (body, shoulders, head) with varied sizes: adults, kids and people who sit. | `src/render/scene.ts` |
+| Main menu: booster and tower are small | A new hero shot: low on the beach, about 330 m from the Catcher. It frames the booster right of centre, clear of the left rail. | `src/render/cameras.ts` (`HERO_CAM`, `ShotInput.hero`) |
 
-- **Dusk sky.** An analytic sky shader with a warm horizon toward the sun, a deep blue zenith, a Mie glow, an HDR sun disc and low stratus plus cirrus. The sun is about 6 deg up over the sea.
-- **Sea.** A custom shader with summed waves, Fresnel sky reflection, a sun glint path, an orange plume glint and light pool, shore foam, a splash ring and horizon haze.
-- **Land.** A height field with a beach, dunes, grass colours and a graded launch site. The site has a pad, a tank farm, a pipe rack and hangars (one merged mesh).
-- **Crowd.** 300 instanced spectators: on the beach in front of the wide cam and down the coast.
-- **Light.** `FogExp2` haze, a low warm sun with shadows, a cool fill light, and a hemisphere light. The PMREM environment comes from the sky shader (no HDR files).
-- **Heron-class booster.**
-  - Hull: `MeshPhysicalMaterial` with a 512x2048 procedural texture set. The set has colour, roughness/metal and normal maps.
-  - Details on the hull: welded ring sheets, one staggered vertical seam per ring, vent slots, soot and two frost bands.
-  - Livery: the heron glyph and a stencil "HB-07", drawn in metres so the text is not stretched.
-  - The texture tiles around the u seam, so the stray vertical white line is gone.
-  - Anisotropic brushing on High only.
-  - Other parts: 4 instanced lattice grid fins that twitch, catch pins, chines, a raceway, 13 + 20 instanced bells and 13 glowing bell discs.
-- **Plume.**
-  - A turbulent additive envelope: wide and chaotic for 13 engines, a tight pillar for 3.
-  - 13 instanced core cones with pulsing shock diamonds.
-  - A nozzle glow sprite. The plume widens with altitude.
-  - An ignition flash. It drives the exposure pump.
-  - The plume light lights the tower and ground. An emissive mask tints the lower hull orange. The plume also lights the sea and the steam.
-- **Steam, spray and dust.** Up to 1400 instanced soft billboards. Steam and spray form over water and dust over land, and the cloud lingers after cutoff. A splashdown makes mist and a recovery boat.
-- **The Catcher.**
-  - Tower: instanced lattice, a top deck, a mast, red aviation lights, guide rails and the carriage.
-  - Arms: two box-truss arms outboard of the rail, so they clear the hull. The rails drop with rail compression.
-  - Other moving parts: the bumpers flex at full close, and the hydraulic cylinders follow each arm.
+I kept the operator's test infrastructure (`?scale=`, timeouts, `test.slow()` and the perf floor).
 
-### Post (`src/render/post.ts`, `view.ts`)
+## What changed (C3)
 
-- Medium and High run this chain: bloom (half resolution on Medium) → `OutputPass` → `FinishPass`.
-- `FinishPass` adds heat shimmer (beach 1.0, wide 0.5), an engine glare with a streak and ghosts, a light vignette and film grain.
-- All tiers get a CSS vignette overlay. Low has no GPU post.
-- Exposure pump: the flash blows out, then the exposure adapts. Reduced motion turns it off.
-- Low uses stratus clouds only and no sea micro-noise.
+### 1. Controls and feel
 
-### Cameras and director (`src/render/cameras.ts`)
+- **Remappable keys** (`src/input/mapping.ts`): a `KeyMap` per action, a Standard preset (design section 5, plus arrow keys) and a One-handed (left hand) preset. `rebind()` removes a key from other actions. GO and ignite can share a key. Menu, camera, mute and throttle-digit keys are reserved.
+- **Settings → Remap keys**: pick an action, then press a key. Esc cancels. The map is saved.
+- **Touch**:
+  - CATCH has an outer countdown ring (time to predicted contact) and an inner hold ring (0.3 s hold to confirm). It shows the seconds left.
+  - Step-down chip "R · 13 → 3".
+  - DIVERT is a slide-and-hold control: slide the knob to the end, then hold for 1 s.
+  - Cadet hides the throttle slider (Cadet flies the throttle for you).
+  - One-handed touch layout (Settings): the stick and CATCH move to the right side.
+- **Keyboard focus**: keys typed in the left menu go to the menu, not to the flight.
+- **M** toggles the sound. Gamepad rumble scales with thrust (as before).
 
-- **Tower top (operator note).** I moved the camera to a boom at (-20, 154, -14). It looks out to sea over the arms, with the pitch clamped so the horizon stays in frame. At +20 s the booster is only about 26 m away and spans about 100 deg, so no lens can hold all of it. The frame now shows the arms, the plume, the lower hull and the horizon. Unit tests check this for 16:9 and phone portrait.
-- **Beach.** A long lens that frames the booster, plus the tower when low. It has a lag and a focus-pull "breath" on each cut.
-- **Drone chase.** A slow orbit that stays above the ground.
-- **Onboard.** Looks down the hull at the plume and the arms.
-- **Wide bay.** Stands on the beach behind the crowd and looks into the sunset glow.
-- **Shake.** Angular shake scales with thrust and distance.
-- **Director.** Beach (ignition), then chase (step-down), wide (divert), beach, then tower top (≥ +20 s or arms closing), then wide after the catch.
-- **Picture-in-picture.** A second view in a framed inset at the top right. It shows on Medium and High only, which keeps Low under the draw-call budget.
-- **Keys.** Numpad 1–5 pick a camera. The digit row already sets the throttle (design section 5), so I did not reuse it.
+### 2. Tiers and tutorial
 
-### HUD and UI (operator notes)
+- **Cadet**: gentle coaching captions after GO and at the hover (yellow "coach" captions), a SLOW-MO tag in the last 20 m, and the 3-2-1 LIGHT cue.
+- **Pilot / Flight Director**: a WIND cell in the strip. It has a direction arrow, the speed, 4 gust bars and a SHEAR tag.
+- **Flight Director**:
+  - The health board chips show ✓ / ✕ / … as well as colours.
+  - A tower sensor fault shows a dashed amber banner, and the STOP readout gets a "?".
+- **First-run tutorial** (`src/app/tutorial.ts`, `src/ui/tutorialView.ts`):
+  - It teaches 3 ideas, one at a time: steer, light, catch. Each step waits for the player, says "Nice!", then moves on.
+  - A step that the player does not do moves on after 5 s. The whole tutorial takes 19 s or less, and Skip ends it.
+  - It runs on top of a frozen Cadet run, then the run flies.
+  - It shows on the first Cadet start. "Practice: 20-second tutorial" in the menu runs it again.
+  - URL hooks skip it. Use `?tutorial=1` to force it.
 
-- An original webcast strip: HB-07, tier and phase, a 33-dot engine ring with the lit count, speed in km/h, altitude, V/S and LAT, a propellant bar, the STOP gauge and a `+mm:ss.s` clock. The strip is at the bottom on desktop and at the top on touch screens.
-- The touch stick and throttle show only while flying (`.touch.flying`).
-- The `THR 70%` label is now a bold, high-contrast pill.
-- The debrief tip depends on the medal (`CATCH_TIPS`), so a Bullseye no longer hears "Try for a Bullseye".
+### 3. Callouts
 
-### Tests
+All callouts are captions with a radio glyph and a synthesized radio blip:
 
-- New `tests/unit/render.test.ts` (12 tests). It covers result-aware tips, the director and PiP rules, `fovToFit`, tower-top framing at +20 s (landscape and portrait) and after the catch, the camera ground clearance, and the terrain.
-- `tests/e2e/perf.spec.ts`: a new Low draw-call test (< 150, Chromium, still frame at +12 s).
-- `__catch.drawCalls` gives the draw-call count. `renderer.info.autoReset` is now false, so the count covers every pass of the frame.
+- "Landing burn, we have thirteen" (or the actual count)
+- "Down to three"
+- "Flight Director, we are GO for catch" / "No-go, divert"
+- "Arms closing"
+- "CATCH!"
+
+The captions are bold white on 78% black with an accent bar. On desktop they sit above the strip; on touch screens they sit above the thumbs. They never cover the middle of the frame.
+
+### 4. Audio (`src/audio/audio.ts`, procedural only)
+
+- **Roar.** 13 engines: a deep rumble plus crackle. 3 engines: a tighter band plus a low hum.
+- **Distance.** A distance low-pass, and the speed-of-sound delay per camera.
+- **Sonic boom.** The double crack plays about 19 s after ignition on the beach camera, and earlier on cameras nearer the booster.
+- **Effects.** Grid-fin chatter, relight pops, hydraulic hiss and clunk, the settle thud, rail creak and the crowd swell.
+- **Music.** A calm D major 9 pad, with a soft pulse that grows as the pins near the rails. A bright arpeggio stinger plays on the catch, and a gentle one on a splashdown.
+- **Mix.** A limiter on the master output. Master volume, music on/off and mute (M) are all saved.
+- **Determinism.** No `Math.random` in the mix. All noise is seeded.
+
+### 5. Debrief (`src/ui/menu.ts`, `src/ui/graphs.ts`)
+
+- Animated counters: 1.4 s, scaled by `timescale`. They are instant with reduced motion or in still frames.
+- The medal shows as a shape and a word: ● Bronze, ◆ Silver, ★ Gold, ◎ Bullseye.
+- The best score per tier is saved with its medal in `g499:catch:best:<tier>`. The main menu shows the bests.
+- One specific tip.
+- Graphs on a canvas: altitude (solid line), speed (dashed line) and an engines-lit band, with LIGHT and CATCH marks.
+- A splashdown shows an illustration of the floating booster and the recovery boat.
+
+### 6. Replay
+
+- **Timeline** (`src/sim/timeline.ts`, pure): the debrief re-flies seed + tier + the recorded input log and keeps 30 frames per sim second. The graphs use the same data.
+- **Clock** (`src/app/scrubber.ts`): play/pause, 0.5x / 1x / 2x and seek. The split window covers the last 15 s.
+- **Replay bar** (`src/ui/replaybar.ts`): play, scrubber, time, speed, "⊞ Split 15 s", camera and exit.
+- **Split view**: a 2x2 view of four synced cameras (beach, tower top, chase, wide) through `View.renderSplit`.
+- **Captions and sounds**: they play again as the clock passes each event.
+- **End**: at the end of the replay, the debrief opens again.
+
+### 7. Accessibility
+
+- Reduced motion: the setting OR the media query. A live change of the media query applies at once.
+- Colour-independent cues: chip glyphs, STOP ▲/◆/▼, a striped low-propellant bar, a thick outline on failed engines, and medal shapes.
+- Phone text: 16 px or more in the menu, captions, tutorial and debrief.
+- Focus: `:focus-visible` outlines. Esc moves the focus into the pause menu. The closed drawer is `inert`.
+- ARIA labels on the controls. Pause on `visibilitychange` (the replay pauses too).
+- A "Real facts" card in the left menu with 3 questions. The first is "Why catch instead of legs?".
+
+### 8. Polish
+
+- Loader: static markup and CSS in `index.html`, painted before any script runs. It fades after the first frame. There is no inline script.
+- A short dip to black between the menu, the flight and the replay. Reduced motion turns it off.
+- Rail sections rise in. The medal pops.
+
+### Tests added
+
+| File | What it covers | Tests |
+| --- | --- | --- |
+| `tests/unit/keymap.test.ts` | presets, one-handed, rebind (property: no key on two actions), reserved keys, sanitize, labels | 12 |
+| `tests/unit/tutorial.test.ts` | step order, held steer, timeouts, skip, ≤ 20 s (property) | 8 |
+| `tests/unit/replayer.test.ts` | clock speeds, end once, pause, split window, seek bounds (property), pointer math, time format; timeline determinism (autopilot, and a hand-flown Pilot run replays bit-identically), interpolation, graph series | 10 |
+| `tests/unit/storage.test.ts` | best per tier, medals, old records, junk, a throwing store, settings round-trip and repair | 8 |
+| `tests/unit/render.test.ts` (+4) | caught → beach, tower-top clearance, layer visibility, hero framing | +4 |
+| `tests/e2e/play.spec.ts` (+3) | debrief counters, graphs, best, beach shot after the catch; replay controls (pause, scrub, speed, split); tutorial by keyboard; skip | +3 |
+| `tests/e2e/ux.spec.ts` (new) | board vs ALTITUDE / STOP on every project; M mute + facts card; keyboard menu navigation; key remap persists; reduced-motion toggle | 5 |
 
 ## Commands for the operator (in order)
 
@@ -75,12 +123,12 @@ I could not run any tools this turn. All code is unverified until the operator r
    pnpm exec playwright test --grep-invert visual > .operator/e2e.txt 2>&1
    ```
 
-   Send me the summary and any failures. Look for shader compile errors in the console-error tests first.
-6. Make the review screenshots and send them to me. They are for review only, so do not commit them.
-   - Desktop chromium, `iPhone 15` and `Pixel 7`.
-   - Queries (all with `still=1&seed=1&tier=cadet`): main menu, `at=2`, `at=8`, `at=12`, `at=20`, `at=28`, and `debrief=1`.
-   - Also one desktop frame at `quality=high` for `at=20`. Still mode forces Low unless a `quality=` hook is set.
-7. Do the visual-baseline step only when step 5 is green and I approve the images:
+   Send me the summary and any failures.
+6. Make review screenshots and send them to me. They are for review only, so do not commit them.
+   - Projects: desktop chromium, `iPhone 15` and `Pixel 7`.
+   - Queries: `still=1&seed=1` (hero menu), `still=1&tier=fd&seed=2&at=10` (board and wind), `still=1&tier=cadet&seed=1&at=20&quality=medium` (tower-top area), and `still=1&tier=cadet&seed=1&debrief=1` (graphs, medal, beach shot).
+   - Also one desktop frame on the tower-top camera: open `test=1&seed=1&tier=cadet&quality=high`, start Cadet, pause at about +22 s and pick "Tower top".
+7. Regenerate the visual baselines. All three change (hero menu, HUD, debrief). Do this only when step 5 is green and I approve the step 6 images:
 
    ```sh
    pnpm exec playwright test visual --update-snapshots
@@ -90,14 +138,25 @@ I could not run any tools this turn. All code is unverified until the operator r
 8. `pnpm ci:local`
 9. Commit and push.
 
-## Suggested commit message
+## Suggested commit messages
 
-`feat(render): dusk Gulf coast scene, PBR Heron booster with livery, volumetric plumes with shock diamonds, steam/dust, Catcher tower and arms, post (bloom/glare/shimmer/grain), cinematic cameras + PiP director, webcast HUD; fix tower-top framing, touch controls only in flight, readable throttle label, result-aware debrief tips`
+1. `fix(render): tower-top lens clear of the tower (boom + hidden top layer), toned-down hull strakes, caught shot on the beach long lens, silhouette crowd, low hero shot for the menu`
+2. `feat(ux): remappable keys + one-handed presets, CATCH countdown/hold ring, DIVERT slide-hold, wind/shear and sensor-fault HUD, board folded into the strip, Cadet tutorial, coaching captions`
+3. `feat(audio): layered 13/3 roar with crackle, fin chatter, timed sonic boom, adaptive music bed and stingers, volume and music settings`
+4. `feat(debrief,replay): animated score, medals, per-tier bests, flight graphs, splashdown art; deterministic replay timeline with scrubber, speeds and 2x2 synced cams`
+5. `test: keymap, tutorial, replay clock/timeline, storage, director/camera units; replay, tutorial and UX e2e`
+
+One commit with all of them is also fine.
 
 ## Known open issues and risks
 
-- **GLSL is unverified.** I made sure the reversed `smoothstep` edges are safe. A shader error shows as a console error in the smoke tests.
-- **Performance on SwiftShader at Low is unknown.** If the autopilot flights miss the 25 s debrief timeout, tell me the fps (`__catch.fps`). Things I can cut: the cloud fbm at Low, the ground resolution, and the hull texture size.
-- **Iteration.** The task asks for at least two art-direction passes. I cannot do them without the screenshots from step 6.
-- **Lens flare occlusion.** The glare does not check occlusion, so it can show through the tower for a moment.
-- **Arm truss.** The truss sits outboard of the rail. If the pins look like they miss the rails in the screenshots, I will tune `ARM_Z` visuals (not the sim).
+- **Unverified compile.** I read every changed file again for strict-TS problems. The most likely failures:
+  - Optional DOM APIs (`MediaQueryList.addEventListener`).
+  - Playwright `fill()` on `input[type=range]`.
+- **Replay timing in software GL.** The replay test needs about 1 s of real time at 0.5x × timescale 8 in the split window. If it is flaky, tell me the fps.
+- **Firefox Tab order.** The keyboard-menu test runs on chromium and firefox. Firefox on Windows tabs to buttons by default. If it fails, I will limit the test to chromium.
+- **Tower top.** One lattice column of the tower can still show at the right edge, about 20 m away. I need a screenshot to judge it.
+- **Hull line.** If the line is still visible, send a close tower-top frame. The next suspect is the normal-map seam at u = 0.
+- **Draw calls.** The Low tier gets 2 more meshes (the strakes and the tower top). The draw-call budget in `perf.spec.ts` is < 150.
+- **Not done.** Gamepad navigation of the left menu, a two-finger twist for roll, and a swipe on the video bar for cameras.
+- **Speech.** `speechSynthesis` stays unused (OFF), so no cloud voices.

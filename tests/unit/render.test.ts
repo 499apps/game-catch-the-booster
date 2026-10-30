@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { AutoDirector, CAMERA_IDS, CameraRig, TOWER_CAM, WIDE_CAM, fovToFit, type ShotInput } from '../../src/render/cameras';
+import { AutoDirector, CAMERA_IDS, CameraRig, TOWER_CAM, TOWER_TOP_LAYER, WIDE_CAM, fovToFit, type ShotInput } from '../../src/render/cameras';
 import { WATERLINE_X, terrainHeight } from '../../src/render/terrain';
-import { RAIL_Y, TOWER_X } from '../../src/sim/constants';
+import { RAIL_Y, TOWER_HEIGHT, TOWER_X } from '../../src/sim/constants';
 import { CATCH_TIPS, TIPS, tipFor } from '../../src/sim/tips';
 
 describe('debrief tips depend on the result', () => {
@@ -28,6 +28,15 @@ describe('auto-director', () => {
     expect(d.desired('burn3', 6, false, null, 6)).toBe('chase');
     expect(d.desired('burn3', 12, false, null, 12)).toBe('wide');
     expect(d.desired('splashdown', 25, false, 25, 26)).toBe('wide');
+  });
+  it('shows the booster held in the arms on the beach long lens after the catch (and in the debrief)', () => {
+    const d = new AutoDirector();
+    expect(d.desired('settling', 31, false, 31, 31.5)).toBe('beach');
+    expect(d.desired('caught', 33, false, 31, 33)).toBe('beach');
+    // The sim clock stops when the run is done: the shot must not depend on it moving on.
+    expect(d.desired('caught', 33, false, 33, 33)).toBe('beach');
+    d.update('burn3', 29, true, null, 29);
+    expect(d.update('caught', 33, false, 33, 33)).toBe('beach');
   });
   it('the picture-in-picture never repeats the main shot and hides after the flight', () => {
     for (const id of CAMERA_IDS) {
@@ -86,6 +95,37 @@ describe('camera framing', () => {
     const c = rig.camera;
     c.updateMatrixWorld();
     expect(inFrame(c, new THREE.Vector3(0, 100, 0))).toBe(true);
+  });
+
+  it('the tower-top lens sits clear of the tower steel (no structure within a few metres)', () => {
+    // Tower column: 12 m square around TOWER_X, z = 0, up to TOWER_HEIGHT (+ deck, housing, mast).
+    const half = 6 + 1.5;
+    const dx = Math.max(0, Math.abs(TOWER_CAM.x - TOWER_X) - half);
+    const dz = Math.max(0, Math.abs(TOWER_CAM.z) - half);
+    expect(Math.hypot(dx, dz)).toBeGreaterThan(10);
+    expect(TOWER_CAM.y).toBeGreaterThan(TOWER_HEIGHT + 5);
+  });
+
+  it('the tower-top structure is on its own layer, hidden from the tower-top lens only', () => {
+    const top = new CameraRig('towerTop', 1.6).camera;
+    const beach = new CameraRig('beach', 1.6).camera;
+    const probe = new THREE.Object3D();
+    probe.layers.set(TOWER_TOP_LAYER);
+    expect(probe.layers.test(top.layers)).toBe(false);
+    expect(probe.layers.test(beach.layers)).toBe(true);
+  });
+
+  it('the menu hero shot is low and close, and frames the booster in the arms', () => {
+    const rig = new CameraRig('wide', 16 / 9);
+    rig.update({ ...shotAt({ x: 0, y: 61, z: 0 }), hero: true }, 0, true);
+    const c = rig.camera;
+    c.updateMatrixWorld();
+    expect(c.position.y).toBeLessThan(10);
+    expect(Math.hypot(c.position.x - TOWER_X, c.position.z)).toBeLessThan(600);
+    expect(inFrame(c, new THREE.Vector3(0, 100, 0))).toBe(true);
+    expect(inFrame(c, new THREE.Vector3(0, 61 + 45, 0))).toBe(true); // the nose
+    // Right of centre on wide screens (the left rail covers the left side).
+    expect(new THREE.Vector3(0, 80, 0).project(c).x).toBeGreaterThan(0);
   });
 
   it('wide and beach cams stand on the ground, above the sand', () => {

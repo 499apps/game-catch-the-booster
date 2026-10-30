@@ -19,7 +19,19 @@ export interface CatchState {
   camera: string;
   paused: boolean;
   replay: boolean;
+  replayT: number | null;
+  split: boolean;
+  tutorial: string | null;
+  muted: boolean;
   drawCalls: number;
+}
+
+/** True when two boxes overlap (by more than 1 px on both axes). */
+export function overlaps(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): boolean {
+  return a.x + 1 < b.x + b.width && b.x + 1 < a.x + a.width && a.y + 1 < b.y + b.height && b.y + 1 < a.y + a.height;
 }
 
 /** Collects console errors and uncaught page errors. */

@@ -44,9 +44,87 @@
         inset: 0;
         touch-action: none;
       }
+      /* Quick loader: painted before any script runs, faded out after the first frame. */
+      #loader {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 14px;
+        background: radial-gradient(ellipse at 50% 70%, #3a2a2a 0%, #16202e 45%, #0d1b2a 100%);
+        transition: opacity 0.6s ease;
+      }
+      #loader.done {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #loader svg {
+        width: 64px;
+        height: 96px;
+      }
+      #loader .flame {
+        transform-origin: 32px 74px;
+        animation: flicker 0.18s ease-in-out infinite alternate;
+      }
+      #loader b {
+        font-size: 18px;
+        letter-spacing: 0.2em;
+      }
+      #loader .bar {
+        width: 160px;
+        height: 3px;
+        border-radius: 2px;
+        background: rgba(255, 255, 255, 0.12);
+        overflow: hidden;
+      }
+      #loader .bar i {
+        display: block;
+        width: 40%;
+        height: 100%;
+        background: #5fffd0;
+        animation: slide 1s ease-in-out infinite;
+      }
+      @keyframes flicker {
+        from {
+          transform: scaleY(0.85);
+        }
+        to {
+          transform: scaleY(1.1);
+        }
+      }
+      @keyframes slide {
+        from {
+          transform: translateX(-100%);
+        }
+        to {
+          transform: translateX(250%);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #loader .flame,
+        #loader .bar i {
+          animation: none;
+        }
+        #loader {
+          transition: none;
+        }
+      }
     </style>
   </head>
   <body>
+    <div id="loader" role="status" aria-label="Loading Catch the Booster">
+      <svg viewBox="0 0 64 96" aria-hidden="true">
+        <rect x="24" y="4" width="16" height="62" rx="3" fill="#c9ced4" />
+        <rect x="24" y="58" width="16" height="8" fill="#5d6066" />
+        <rect x="18" y="12" width="6" height="5" fill="#8e9196" />
+        <rect x="40" y="12" width="6" height="5" fill="#8e9196" />
+        <path class="flame" d="M26 68 Q32 92 38 68 Z" fill="#ffcf86" />
+      </svg>
+      <b>CATCH THE BOOSTER</b>
+      <span class="bar"><i></i></span>
+    </div>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

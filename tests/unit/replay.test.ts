@@ -50,7 +50,8 @@ describe('input log', () => {
         const rec = new InputRecorder();
         xs.forEach((x, i) => rec.record(i, { ...NEUTRAL_INPUT, stickX: x }));
         const p = new InputPlayer(rec.log);
-        xs.forEach((x, i) => expect(p.at(i).stickX).toBe(x));
+        // -0 and +0 are the same stick position; the sparse recorder treats them as unchanged.
+        xs.forEach((x, i) => expect(p.at(i).stickX + 0).toBe(x + 0));
       }),
     );
   });

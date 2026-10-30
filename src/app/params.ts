@@ -21,6 +21,8 @@ export interface Hooks {
   quality: QualitySetting | null;
   /** Test-only render scale (0.25 to 1) on top of the quality pixel ratio; keeps software-GL e2e responsive. */
   scale: number;
+  /** Force the Cadet first-run tutorial (other hooks skip it so tests start at once). */
+  tutorial: boolean;
 }
 
 const QUALITY_IDS: readonly string[] = ['auto', 'low', 'medium', 'high'];
@@ -35,7 +37,7 @@ function num(v: string | null): number | null {
 
 export function parseHooks(search: string): Hooks {
   const p = new URLSearchParams(search);
-  const keys = ['autopilot', 'timescale', 'still', 'seed', 'tier', 'at', 'debrief', 'fps', 'test', 'quality', 'scale'];
+  const keys = ['autopilot', 'timescale', 'still', 'seed', 'tier', 'at', 'debrief', 'fps', 'test', 'quality', 'scale', 'tutorial'];
   const q = p.get('quality');
   const active = keys.some((k) => p.has(k));
   const tierRaw = p.get('tier');
@@ -52,5 +54,6 @@ export function parseHooks(search: string): Hooks {
     fps: p.get('fps') === '1' || active,
     quality: q && QUALITY_IDS.includes(q) ? (q as QualitySetting) : null,
     scale: Math.min(Math.max(num(p.get('scale')) ?? 1, 0.25), 1),
+    tutorial: p.get('tutorial') === '1',
   };
 }

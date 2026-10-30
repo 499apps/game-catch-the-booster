@@ -1,6 +1,8 @@
 // Broadcast HUD: an original webcast-style telemetry strip (T+ clock, speed, altitude,
-// propellant, an engine ring that lights per engine, the stop-height predictor), the
-// GO/NO-GO strip, captions, the picture-in-picture frame and the action buttons.
+// propellant, an engine ring that lights per engine, the stop-height predictor, wind),
+// the GO/NO-GO health board (folded into the strip), captions, the picture-in-picture
+// frame and the action buttons (CATCH with its countdown ring, LIGHT, step-down, DIVERT).
+// Every in/out-of-tolerance cue has a glyph or a shape as well as a colour.
 import type { EngineState, GoNoGoState, HealthBoard, Phase } from '../sim/types';
 import type { TierId } from '../sim/tiers';
 import { engineLayout } from '../render/scene';
@@ -21,11 +23,23 @@ export interface HudData {
   stopMargin: number | null; // m: where the booster would stop vs. the arms (+ = above)
   igniteIn: number | null; // s until the ideal ignition point (coast)
   gonogo: GoNoGoState;
+  /** False in replays (the board is a live decision tool). */
+  showBoard: boolean;
   fdDecide: boolean;
   catchVisible: boolean;
+  /** Seconds to predicted pin contact while CATCH shows (drives the countdown ring). */
+  catchTgo: number | null;
+  /** 0..1 of the 0.3 s hold-to-confirm. */
+  catchHold: number;
   armsClosing: boolean;
   stepVisible: boolean;
   lightVisible: boolean;
+  /** 0..1 of the 1 s divert hold. */
+  divertHold: number;
+  /** Wind at the booster: speed (m/s), direction (rad, atan2(z, x)), gust (m/s), shear on. */
+  wind: { speed: number; dir: number; gust: number; shear: boolean } | null;
+  sensorFault: boolean;
+  slowMo: boolean;
   camera: string;
   fps: number | null;
   paused: boolean;
@@ -50,6 +64,11 @@ const PHASE_LABEL: Record<Phase, string> = {
 };
 
 const TIER_LABEL: Record<TierId, string> = { cadet: 'CADET', pilot: 'PILOT', fd: 'FLIGHT DIRECTOR' };
+
+/** CATCH ring: the countdown covers the last this many seconds before contact. */
+const RING_SECONDS = 6.5;
+const RING_R = 46;
+const RING_C = 2 * Math.PI * RING_R;
 
 function fmt(n: number, digits = 0): string {
   return n.toFixed(digits);
@@ -78,25 +97,40 @@ export class Hud {
   private readonly stopMark = el('i');
   private readonly ringDots: SVGCircleElement[] = [];
   private readonly ringCount = svgEl('text', { x: 0, y: 0.55, 'text-anchor': 'middle', class: 'count' });
-  private readonly gonogo = el('div', { id: 'gonogo', 'data-testid': 'gonogo' });
+  private readonly windCell = el('span', { class: 'cell wind', 'data-testid': 'hud-wind' });
+  private readonly windArrow = svgEl('g', {});
+  private readonly windText = el('span', { class: 'v sm' });
+  private readonly gustBars: HTMLElement[] = [];
+  private readonly shearTag = el('span', { class: 'shear', text: 'SHEAR' });
+  private readonly gonogo = el('div', { id: 'gonogo', 'data-testid': 'gonogo', role: 'group', 'aria-label': 'Go/No-Go health board' });
   private readonly chips: Record<string, HTMLSpanElement> = {};
   private readonly decision = el('span', { class: 'decision', 'data-testid': 'gonogo-decision' });
-  private readonly goBtn = el('button', { class: 'go', 'data-testid': 'go-btn', text: 'GO' });
-  private readonly noGoBtn = el('button', { class: 'nogo', 'data-testid': 'nogo-btn', text: 'NO-GO (hold)' });
+  private readonly goBtn = el('button', { class: 'go', 'data-testid': 'go-btn', text: '✓ GO', 'aria-label': 'GO for catch' });
+  private readonly divert = el('div', { class: 'divert', 'data-testid': 'nogo-btn', role: 'slider', 'aria-label': 'Slide and hold to divert (No-Go)' });
+  private readonly divertKnob = el('span', { class: 'knob', text: '⇢' });
+  private readonly divertFill = el('i');
+  private readonly fault = el('div', { id: 'fault', 'data-testid': 'sensor-fault', role: 'alert', text: '⚠ TOWER SENSOR FAULT · stop gauge unreliable' });
   private readonly captions = el('div', { id: 'captions', role: 'status', 'aria-live': 'polite' });
+  private readonly captionText = el('span');
   private readonly cameraTag = el('div', { id: 'camera-tag' });
+  private readonly slowMo = el('div', { id: 'slowmo', text: '◷ SLOW-MO' });
   private readonly pip = el('div', { id: 'pip', 'data-testid': 'pip' });
   private readonly pipLabel = el('span');
   private readonly fps = el('div', { id: 'fps', 'data-testid': 'fps' });
   private readonly paused = el('div', { id: 'paused-tag', text: 'PAUSED' });
-  readonly catchBtn = el('button', { id: 'catch-btn', class: 'action ui', 'data-testid': 'catch-btn', text: 'CATCH' });
+  readonly catchBtn = el('button', { id: 'catch-btn', class: 'action ui', 'data-testid': 'catch-btn', 'aria-label': 'CATCH: press and hold to close the arms' });
+  private readonly catchLabel = el('span', { class: 'label', text: 'CATCH' });
+  private readonly catchSub = el('span', { class: 'sub' });
+  private readonly ringCount2 = svgEl('circle', { cx: 50, cy: 50, r: RING_R, class: 'count' });
+  private readonly ringHold = svgEl('circle', { cx: 50, cy: 50, r: RING_R - 7, class: 'hold' });
   readonly lightBtn = el('button', { id: 'light-btn', class: 'action ui', 'data-testid': 'light-btn', text: 'LIGHT' });
-  readonly stepBtn = el('button', { id: 'step-btn', class: 'action ui', 'data-testid': 'step-btn', text: '13 → 3' });
+  readonly stepBtn = el('button', { id: 'step-btn', class: 'action ui', 'data-testid': 'step-btn', 'aria-label': 'Step down from 13 to 3 engines (R)' });
   private captionUntil = 0;
+  private divertActive = false;
 
   constructor(parent: HTMLElement, devices: InputDevices) {
     // Engine ring: 13 landing engines (lit per engine) inside a ring of 20 fixed outer bells.
-    const ring = svgEl('svg', { id: 'engine-ring', viewBox: '-5 -5 10 10', 'aria-label': 'engines lit' });
+    const ring = svgEl('svg', { id: 'engine-ring', viewBox: '-5 -5 10 10', role: 'img', 'aria-label': 'engines lit' });
     ring.append(svgEl('circle', { cx: 0, cy: 0, r: 4.8, class: 'rim' }));
     for (let i = 0; i < 20; i++) {
       const a = (i / 20) * Math.PI * 2 + 0.16;
@@ -112,6 +146,28 @@ export class Hud {
     const propBar = el('span', { class: 'bar' }, [this.propFill]);
     const cell = (k: string, ...v: (HTMLElement | string)[]): HTMLSpanElement =>
       el('span', { class: 'cell' }, [el('span', { class: 'k', text: k }), el('span', { class: 'row' }, v)]);
+
+    // Wind: an arrow (top-down, sea to the right), the speed, gust bars and a shear tag.
+    const windSvg = svgEl('svg', { viewBox: '-10 -10 20 20', class: 'wind-dial', 'aria-hidden': 'true' });
+    windSvg.append(svgEl('circle', { cx: 0, cy: 0, r: 9, class: 'dial' }));
+    this.windArrow.append(svgEl('path', { d: 'M-6 0 H4 M1 -3.5 L5 0 L1 3.5', class: 'arrow' }));
+    windSvg.append(this.windArrow);
+    const gust = el('span', { class: 'gust', 'aria-hidden': 'true' });
+    for (let i = 0; i < 4; i++) {
+      const b = el('i');
+      this.gustBars.push(b);
+      gust.append(b);
+    }
+    this.windCell.append(el('span', { class: 'k', text: 'WIND' }), el('span', { class: 'row' }, [windSvg, this.windText, gust, this.shearTag]));
+
+    for (const [key, label] of BOARD_LABELS) {
+      const c = el('span', { class: 'chip', text: `… ${label}` });
+      this.chips[key] = c;
+      this.gonogo.append(c);
+    }
+    this.divert.append(this.divertFill, el('span', { class: 'track', text: 'slide · hold to DIVERT' }), this.divertKnob);
+    this.gonogo.append(this.decision, this.goBtn, this.divert);
+
     const telemetry = el('div', { id: 'telemetry', 'data-testid': 'telemetry' }, [
       el('span', { class: 'brand' }, [el('b', { text: 'HB-07' }), this.mission]),
       ring,
@@ -125,22 +181,29 @@ export class Hud {
       ]),
       cell('PROP', propBar, this.prop),
       cell('STOP', gauge, this.stopLabel),
+      this.windCell,
       el('span', { class: 'cell time' }, [el('span', { class: 'k', text: 'T' }), this.tPlus]),
+      // Folded in: above the strip on desktop, a wrapped row inside it on phones.
+      this.gonogo,
     ]);
-    for (const [key, label] of BOARD_LABELS) {
-      const c = el('span', { class: 'chip', text: label });
-      this.chips[key] = c;
-      this.gonogo.append(c);
-    }
-    this.gonogo.append(this.decision, this.goBtn, this.noGoBtn);
     this.pip.append(this.pipLabel);
     this.pip.hidden = true;
+    this.captions.append(el('span', { class: 'radio', 'aria-hidden': 'true', text: '◉' }), this.captionText);
+
+    // CATCH: a countdown ring (time to contact) around a hold-to-confirm fill.
+    const ringSvg = svgEl('svg', { viewBox: '0 0 100 100', class: 'ring', 'aria-hidden': 'true' });
+    ringSvg.append(svgEl('circle', { cx: 50, cy: 50, r: RING_R, class: 'track' }), this.ringCount2, this.ringHold);
+    this.ringCount2.setAttribute('stroke-dasharray', `${RING_C.toFixed(1)}`);
+    this.ringHold.setAttribute('stroke-dasharray', `${(2 * Math.PI * (RING_R - 7)).toFixed(1)}`);
+    this.catchBtn.append(ringSvg, this.catchLabel, this.catchSub);
+    this.stepBtn.append(el('span', { class: 'key', text: 'R' }), el('span', { text: '13 → 3' }));
 
     this.root = el('div', { id: 'hud', class: 'ui hidden', 'data-testid': 'hud' }, [
       telemetry,
-      this.gonogo,
+      this.fault,
       this.captions,
       this.cameraTag,
+      this.slowMo,
       this.pip,
       this.fps,
       this.paused,
@@ -168,7 +231,6 @@ export class Hud {
       b.addEventListener('contextmenu', (e) => e.preventDefault());
     };
     hold(this.catchBtn, (d) => (devices.touchCatchDown = d));
-    hold(this.noGoBtn, (d) => (devices.touchDivertDown = d));
     const tap = (b: HTMLElement, fn: () => void): void => {
       b.addEventListener('pointerdown', (e) => {
         e.preventDefault();
@@ -178,6 +240,41 @@ export class Hud {
     tap(this.lightBtn, () => (devices.touch.ignitePressed = true));
     tap(this.stepBtn, () => (devices.touch.stepDownPressed = true));
     tap(this.goBtn, () => (devices.touch.goPressed = true));
+
+    // DIVERT: slide the knob to the end, then keep holding for 1 s.
+    let startX = 0;
+    let pid: number | null = null;
+    const setKnob = (px: number): void => {
+      this.divertKnob.style.transform = px > 0 ? `translateX(${px.toFixed(0)}px)` : '';
+    };
+    this.divert.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      pid = e.pointerId;
+      startX = e.clientX;
+      this.divert.setPointerCapture?.(e.pointerId);
+    });
+    this.divert.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== pid) return;
+      const w = Math.max(40, this.divert.clientWidth - this.divertKnob.clientWidth);
+      const k = Math.max(0, Math.min(1, (e.clientX - startX) / w));
+      setKnob(k * w);
+      const on = k >= 0.85;
+      if (on !== this.divertActive) {
+        this.divertActive = on;
+        devices.touchDivertDown = on;
+        this.divert.classList.toggle('armed', on);
+      }
+    });
+    const end = (e: PointerEvent): void => {
+      if (e.pointerId !== pid) return;
+      pid = null;
+      this.divertActive = false;
+      devices.touchDivertDown = false;
+      this.divert.classList.remove('armed');
+      setKnob(0);
+    };
+    this.divert.addEventListener('pointerup', end);
+    this.divert.addEventListener('pointercancel', end);
   }
 
   setVisible(on: boolean): void {
@@ -199,14 +296,14 @@ export class Hud {
     return { x: r.left - c.left + 2, y: r.top - c.top + 2, w: r.width - 4, h: r.height - 4 };
   }
 
-  caption(text: string, now: number, seconds = 3): void {
-    setText(this.captions, text);
-    this.captions.classList.add('show');
+  caption(text: string, now: number, seconds = 3, kind: 'radio' | 'coach' = 'radio'): void {
+    setText(this.captionText, text);
+    this.captions.className = `show ${kind}`;
     this.captionUntil = now + seconds;
   }
 
   clearCaption(): void {
-    this.captions.classList.remove('show');
+    this.captions.className = '';
     this.captionUntil = 0;
   }
 
@@ -236,7 +333,8 @@ export class Hud {
       const dot = this.ringDots[i];
       if (!dot || !e) continue;
       const on = e.mode === 'lit' || (e.mode === 'spooling' && !e.willFail && e.spool > e.spoolTime * 0.5);
-      dot.setAttribute('class', on ? 'on' : e.mode === 'spooling' ? 'spool' : e.mode === 'failed' ? 'fail' : '');
+      const cls = on ? 'on' : e.mode === 'spooling' ? 'spool' : e.mode === 'failed' ? 'fail' : '';
+      if (dot.getAttribute('class') !== cls) dot.setAttribute('class', cls);
     }
     const cnt = n > 0 ? String(n) : '';
     if (this.ringCount.textContent !== cnt) this.ringCount.textContent = cnt;
@@ -244,39 +342,72 @@ export class Hud {
     if (d.stopMargin === null || !Number.isFinite(d.stopMargin)) {
       setText(this.stopLabel, '--');
       this.stopMark.style.left = '0%';
+      this.stopMark.className = '';
     } else {
       const m = d.stopMargin;
-      setText(this.stopLabel, `${m >= 0 ? '+' : ''}${fmt(m)} m`);
+      // A glyph as well as a colour: ▲ stops above the arms, ▼ would pass below them.
+      const glyph = m < -20 ? '▼' : m < 40 ? '◆' : '▲';
+      setText(this.stopLabel, `${glyph} ${m >= 0 ? '+' : ''}${fmt(m)} m${d.sensorFault ? ' ?' : ''}`);
       const pct = Math.max(0, Math.min(100, 50 + (m / 600) * 100));
       this.stopMark.style.left = `calc(${pct.toFixed(1)}% - 2px)`;
-      this.stopMark.style.background = m < -20 ? 'var(--bad)' : m < 40 ? 'var(--warn)' : 'var(--accent)';
+      const cls = m < -20 ? 'bad' : m < 40 ? 'warn' : 'ok';
+      if (this.stopMark.className !== cls) this.stopMark.className = cls;
     }
 
+    // Wind / gusts / shear (Pilot and Flight Director).
+    show(this.windCell, d.wind !== null);
+    if (d.wind) {
+      const w = d.wind;
+      this.windArrow.setAttribute('transform', `rotate(${((w.dir * 180) / Math.PI).toFixed(0)})`);
+      setText(this.windText, `${fmt(w.speed)} m/s`);
+      const bars = Math.min(4, Math.round(w.gust / 1.0));
+      this.gustBars.forEach((b, i) => {
+        const on = i < bars;
+        if (b.classList.contains('on') !== on) b.classList.toggle('on', on);
+      });
+      show(this.shearTag, w.shear);
+    }
+    show(this.fault, d.sensorFault && d.tau !== null && (d.phase === 'burn13' || d.phase === 'burn3'));
+
     const g = d.gonogo;
-    show(this.gonogo, d.tau !== null && d.phase !== 'caught' && d.phase !== 'settling');
-    for (const [key] of BOARD_LABELS) {
+    show(this.gonogo, d.showBoard && d.tau !== null && d.phase !== 'caught' && d.phase !== 'settling' && d.phase !== 'splashdown');
+    for (const [key, label] of BOARD_LABELS) {
       const c = this.chips[key];
       if (!c) continue;
       const v = g.board ? g.board[key] : null;
       const cls = v === null ? 'chip' : v ? 'chip ok' : 'chip bad';
       if (c.className !== cls) c.className = cls;
+      setText(c, `${v === null ? '…' : v ? '✓' : '✕'} ${label}`);
     }
-    const dec = g.decision === 'go' ? 'GO' : g.decision === 'noGo' ? 'NO-GO' : g.polled ? 'POLL' : 'STANDBY';
+    const dec = g.decision === 'go' ? '✓ GO' : g.decision === 'noGo' ? '✕ NO-GO' : g.polled ? '? POLL' : 'STANDBY';
     setText(this.decision, dec);
-    const dcls = `decision ${g.decision === 'go' ? 'go' : g.decision === 'noGo' ? 'nogo' : ''}`;
+    const dcls = `decision ${g.decision === 'go' ? 'go' : g.decision === 'noGo' ? 'nogo' : g.polled ? 'poll' : ''}`;
     if (this.decision.className !== dcls) this.decision.className = dcls;
     const deciding = d.fdDecide && g.polled && g.decision === 'pending';
     show(this.goBtn, deciding);
-    show(this.noGoBtn, deciding);
+    show(this.divert, deciding);
+    this.divertFill.style.width = `${fmt(Math.min(1, d.divertHold) * 100)}%`;
 
+    // CATCH with the countdown ring and the hold-to-confirm fill.
     show(this.catchBtn, d.catchVisible);
-    setText(this.catchBtn, d.armsClosing ? 'CLOSING' : 'CATCH');
+    if (d.catchVisible) {
+      const left = d.catchTgo === null ? 1 : Math.max(0, Math.min(1, d.catchTgo / RING_SECONDS));
+      this.ringCount2.setAttribute('stroke-dashoffset', (RING_C * (1 - left)).toFixed(1));
+      const hc = 2 * Math.PI * (RING_R - 7);
+      const hold = d.armsClosing ? 1 : Math.max(0, Math.min(1, d.catchHold));
+      this.ringHold.setAttribute('stroke-dashoffset', (hc * (1 - hold)).toFixed(1));
+      setText(this.catchLabel, d.armsClosing ? 'CLOSING' : 'CATCH');
+      setText(this.catchSub, d.armsClosing ? '✓ arms moving' : d.catchTgo !== null ? `${fmt(Math.max(0, d.catchTgo), 1)} s` : 'hold');
+      this.catchBtn.classList.toggle('closing', d.armsClosing);
+      this.catchBtn.classList.toggle('urgent', !d.armsClosing && d.catchTgo !== null && d.catchTgo < 4.5);
+    }
     show(this.lightBtn, d.lightVisible);
     if (d.lightVisible && d.igniteIn !== null && d.tier === 'cadet') {
       const k = Math.ceil(d.igniteIn);
       setText(this.lightBtn, k >= 1 && k <= 3 ? `${k}… LIGHT` : 'LIGHT');
     } else setText(this.lightBtn, 'LIGHT');
     show(this.stepBtn, d.stepVisible);
+    show(this.slowMo, d.slowMo);
     setText(this.cameraTag, d.camera);
     setText(this.fps, d.fps === null ? '' : `${fmt(d.fps)} fps`);
     show(this.paused, d.paused);

@@ -19,3 +19,4 @@ export * from './autopilot';
 export * from './control';
 export * from './world';
 export * from './replay';
+export * from './timeline';
