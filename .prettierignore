@@ -1,0 +1,8 @@
+dist
+node_modules
+pnpm-lock.yaml
+public/icons
+test-results
+playwright-report
+blob-report
+docs/design.md
